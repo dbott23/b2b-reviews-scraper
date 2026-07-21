@@ -159,10 +159,10 @@ async def scrape(
             ),
             "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
         }
-        # Use proxy if provided, but skip for now to test direct connection
-        if proxy_url:
-            context_opts["proxy"] = {"server": proxy_url}
-        print(f"[g2] launching browser, proxy={'yes' if proxy_url else 'no'}", flush=True)
+        # TEST: skip proxy to see if direct connection works
+        # if proxy_url:
+        #     context_opts["proxy"] = {"server": proxy_url}
+        print(f"[g2] launching browser, proxy=DISABLED FOR TEST (was: {'yes' if proxy_url else 'no'})", flush=True)
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
         await apply_stealth(page)

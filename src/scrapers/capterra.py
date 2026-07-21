@@ -34,14 +34,13 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
         print(f"[capterra] search using proxy: ...@{masked}", flush=True)
 
     async with async_playwright() as pw:
-        launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
+        launch_args = [
+            "--no-sandbox", "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled",
+        ]
         browser = await pw.chromium.launch(headless=True, args=launch_args)
-        ctx_opts: dict = {
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-            ),
-        }
+        # No custom user_agent — use Playwright's default to avoid version mismatch
+        ctx_opts: dict = {}
         if proxy:
             ctx_opts["proxy"] = {"server": proxy}
         context = await browser.new_context(**ctx_opts)
@@ -49,23 +48,22 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
         await apply_stealth(page)
 
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
+        html = ""
         try:
-            await page.goto(url, wait_until="load", timeout=90000)
-            await asyncio.sleep(3)
-            html = await page.content()
-            # Retry if still empty (mid-navigation race)
-            for _ in range(3):
-                if html:
-                    break
-                await asyncio.sleep(3)
-                html = await page.content()
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         except Exception as e:
-            print(f"[capterra] search navigation failed: {e}", flush=True)
-            # Try to get whatever content is there
+            print(f"[capterra] goto failed: {e}", flush=True)
+
+        # Poll for content — Cloudflare challenge may take time to resolve
+        for poll in range(15):
             try:
                 html = await page.content()
             except Exception:
                 html = ""
+            print(f"[capterra] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
+            if html and len(html) > 500:
+                break
+            await asyncio.sleep(4)
 
         final_url = page.url
         await browser.close()
@@ -177,17 +175,18 @@ async def scrape(
     if not product_url:
         return []
 
+    proxy = await _resolve_proxy(_get_proxy)
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        context_opts: dict = {
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            ),
-        }
-        if proxy_url:
-            context_opts["proxy"] = {"server": proxy_url}
-        context = await browser.new_context(**context_opts)
+        launch_args = [
+            "--no-sandbox", "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled",
+        ]
+        browser = await pw.chromium.launch(headless=True, args=launch_args)
+        # No custom user_agent — use Playwright's default to avoid version mismatch
+        ctx_opts: dict = {}
+        if proxy:
+            ctx_opts["proxy"] = {"server": proxy}
+        context = await browser.new_context(**ctx_opts)
         page = await context.new_page()
         await apply_stealth(page)
 
@@ -204,24 +203,27 @@ async def scrape(
             if min_rating:
                 url += f"&rating={min_rating}"
 
+            html = ""
             try:
-                await page.goto(url, wait_until="commit", timeout=60000)
-            except Exception:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as e:
+                print(f"[capterra] reviews goto failed page {page_num}: {e}", flush=True)
+
+            # Poll for content — Cloudflare challenge may take time to resolve
+            for poll in range(10):
+                try:
+                    html = await page.content()
+                except Exception:
+                    html = ""
+                print(f"[capterra] reviews poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
+                if html and len(html) > 500:
+                    break
+                await asyncio.sleep(4)
+
+            if not html:
                 break
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=60000)
-            except Exception:
-                pass
-            # Wait for review cards to render
-            try:
-                await page.wait_for_selector(
-                    "[data-testid='review-card'], .review-card, article[class*='review'], [class*='ReviewCard']",
-                    timeout=10000,
-                )
-            except Exception:
-                pass
-            await asyncio.sleep(3)
-            html = await page.content()
+
+            print(f"[capterra] reviews html preview: {html[:300]}", flush=True)
             page_records = _parse_reviews(html, company, product_url)
 
             if not page_records:

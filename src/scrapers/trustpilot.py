@@ -199,14 +199,13 @@ async def _scrape_web(
         print("[trustpilot] no proxy — direct connection", flush=True)
 
     async with async_playwright() as pw:
-        launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
+        launch_args = [
+            "--no-sandbox", "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled",
+        ]
         browser = await pw.chromium.launch(headless=True, args=launch_args)
-        ctx_opts: dict = {
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-            ),
-        }
+        # No custom user_agent — use Playwright's default to avoid version mismatch
+        ctx_opts: dict = {}
         if proxy:
             ctx_opts["proxy"] = {"server": proxy}
         context = await browser.new_context(**ctx_opts)
@@ -216,24 +215,22 @@ async def _scrape_web(
         page_num = 1
         while len(records) < max_reviews:
             url = f"{product_url}?sort={sort_param}&page={page_num}"
+            html = ""
             try:
-                await page.goto(url, wait_until="load", timeout=90000)
-                await asyncio.sleep(3)
-                html = await page.content()
-                # Retry if still empty (mid-navigation race)
-                for _ in range(3):
-                    if html:
-                        break
-                    await asyncio.sleep(3)
-                    html = await page.content()
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             except Exception as e:
-                print(f"[trustpilot] navigation failed page {page_num}: {e}", flush=True)
+                print(f"[trustpilot] goto failed page {page_num}: {e}", flush=True)
+
+            # Poll for content — Cloudflare challenge may take time to resolve
+            for poll in range(10):
                 try:
                     html = await page.content()
                 except Exception:
                     html = ""
-                if not html:
+                print(f"[trustpilot] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
+                if html and len(html) > 500:
                     break
+                await asyncio.sleep(4)
 
             print(f"[trustpilot] loaded page {page_num}, url: {page.url}, html length: {len(html)}", flush=True)
             print(f"[trustpilot] html preview: {html[:300]}", flush=True)

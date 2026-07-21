@@ -30,9 +30,8 @@ SORT_MAP = {
 
 async def _search_product_url(company: str, proxy_url: str | None) -> str | None:
     """Use plain HTTP to search Capterra — avoids Playwright fingerprint detection."""
+    # Try without proxy first; residential proxies often get 403 on Capterra's CDN
     client_kwargs: dict = {"headers": _HEADERS, "follow_redirects": True, "timeout": 30}
-    if proxy_url:
-        client_kwargs["proxy"] = proxy_url
 
     async with httpx.AsyncClient(**client_kwargs) as client:
         try:

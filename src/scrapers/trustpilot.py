@@ -201,8 +201,8 @@ async def _scrape_web(
         "follow_redirects": True,
         "timeout": 30,
     }
-    if proxy_url:
-        client_kwargs["proxy"] = proxy_url
+    # Note: residential proxies cause 403 on Trustpilot's CDN; httpx without proxy works fine
+    # proxy_url intentionally not applied here
 
     page_num = 1
     async with httpx.AsyncClient(**client_kwargs) as client:

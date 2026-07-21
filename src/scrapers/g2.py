@@ -166,6 +166,8 @@ async def scrape(
         await apply_stealth(page)
 
         slug = await _find_product_slug(page, company)
+        g2_html_snippet = await page.content()
+        print(f"[g2] slug={slug} page_title={await page.title()!r} html_len={len(g2_html_snippet)} snippet={g2_html_snippet[:300]!r}", flush=True)
         if not slug:
             await browser.close()
             return []

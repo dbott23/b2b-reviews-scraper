@@ -206,7 +206,11 @@ async def scrape(
 
             await asyncio.sleep(3)
 
+            page_title = await page.title()
+            print(f"[g2] attempt {attempt}: title={page_title!r}, url={page.url}", flush=True)
+
             if await _is_blocked(page):
+                print(f"[g2] DataDome block detected on attempt {attempt}", flush=True)
                 if attempt == 0:
                     page = await _new_context(pw, browser_ref)
                     continue
@@ -217,6 +221,7 @@ async def scrape(
             m = re.search(r"/products/([^/?#]+)", current_url)
             if m:
                 resolved_slug = m.group(1)
+                print(f"[g2] resolved slug from URL: {resolved_slug}", flush=True)
             else:
                 # Try search as fallback
                 try:

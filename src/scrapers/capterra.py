@@ -36,6 +36,10 @@ async def _search_product_url(page, company: str) -> str | None:
                    .filter(h => h)
     """)
 
+    product_hrefs = [h for h in hrefs if any(pat in h for pat in ["/p/", "/reviews/", "/software/"])]
+    print(f"[capterra] page title: {await page.title()!r}, url: {page.url}", flush=True)
+    print(f"[capterra] total links: {len(hrefs)}, product-like links: {product_hrefs[:5]}", flush=True)
+
     for href in hrefs:
         if any(pat in href for pat in ["/p/", "/reviews/", "/software/"]):
             return "https://www.capterra.com" + href if href.startswith("/") else href

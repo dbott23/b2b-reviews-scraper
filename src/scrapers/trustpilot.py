@@ -211,10 +211,14 @@ async def _scrape_web(
 
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            except Exception:
+            except Exception as e:
+                print(f"[trustpilot] goto failed: {e}", flush=True)
                 break
 
             await asyncio.sleep(3)
+
+            page_title = await page.title()
+            print(f"[trustpilot] page title: {page_title!r}, url: {page.url}", flush=True)
 
             # Prefer __NEXT_DATA__ JSON — it's stable across HTML class renames
             next_data = await page.evaluate("""
@@ -226,10 +230,15 @@ async def _scrape_web(
             """)
 
             if next_data:
+                pp = (next_data or {}).get("props", {}).get("pageProps", {})
+                print(f"[trustpilot] __NEXT_DATA__ found, pageProps keys: {list(pp.keys())}", flush=True)
                 page_records = _extract_next_data_reviews(next_data, company, product_url)
+                print(f"[trustpilot] extracted {len(page_records)} records from __NEXT_DATA__", flush=True)
             else:
+                print("[trustpilot] no __NEXT_DATA__ found, falling back to HTML parse", flush=True)
                 html = await page.content()
                 page_records = _parse_web_reviews(html, company, product_url)
+                print(f"[trustpilot] extracted {len(page_records)} records from HTML", flush=True)
 
             if not page_records:
                 break

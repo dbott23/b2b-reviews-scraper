@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 
 from bs4 import BeautifulSoup
-from patchright.async_api import async_playwright
+from camoufox.async_api import AsyncCamoufox
 
 from src.scrapers._stealth import apply_stealth
 

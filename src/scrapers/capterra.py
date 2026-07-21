@@ -1,4 +1,4 @@
-"""Capterra scraper — uses patchright (patched Chromium) to bypass Cloudflare."""
+"""Capterra scraper — uses camoufox (Firefox + anti-detection) to bypass Cloudflare."""
 
 import asyncio
 import re
@@ -6,7 +6,7 @@ from datetime import datetime
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
-from patchright.async_api import async_playwright
+from camoufox.async_api import AsyncCamoufox
 
 SORT_MAP = {
     "recent": "most_recent",
@@ -14,8 +14,6 @@ SORT_MAP = {
     "highest": "highest_rating",
     "lowest": "lowest_rating",
 }
-
-LAUNCH_ARGS = ["--no-sandbox", "--disable-setuid-sandbox"]
 
 
 async def _resolve_proxy(get_proxy_url) -> str | None:
@@ -52,17 +50,11 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
         masked = proxy.split("@")[-1] if "@" in proxy else proxy
         print(f"[capterra] search using proxy: ...@{masked}", flush=True)
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
-        ctx_opts: dict = {}
-        if proxy:
-            ctx_opts["proxy"] = {"server": proxy}
-        context = await browser.new_context(**ctx_opts)
-        page = await context.new_page()
-
+    proxy_opts = {"server": proxy} if proxy else None
+    async with AsyncCamoufox(headless=True, proxy=proxy_opts) as browser:
+        page = await browser.new_page()
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
         html = await _get_html(page, url, "capterra")
-        await browser.close()
 
     print(f"[capterra] search html preview: {html[:400]}", flush=True)
 
@@ -168,6 +160,7 @@ async def scrape(
         return []
 
     proxy = await _resolve_proxy(_get_proxy)
+    proxy_opts = {"server": proxy} if proxy else None
 
     if "/reviews" in product_url:
         reviews_url = product_url.rstrip("/") + "/"
@@ -176,13 +169,8 @@ async def scrape(
     ct_sort = SORT_MAP.get(sort_by, "most_recent")
     page_num = 1
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
-        ctx_opts: dict = {}
-        if proxy:
-            ctx_opts["proxy"] = {"server": proxy}
-        context = await browser.new_context(**ctx_opts)
-        page = await context.new_page()
+    async with AsyncCamoufox(headless=True, proxy=proxy_opts) as browser:
+        page = await browser.new_page()
 
         while len(records) < max_reviews:
             url = f"{reviews_url}?sort={ct_sort}&page={page_num}"
@@ -201,7 +189,5 @@ async def scrape(
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1.5)
-
-        await browser.close()
 
     return records[:max_reviews]

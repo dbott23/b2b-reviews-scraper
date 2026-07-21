@@ -10,7 +10,7 @@ from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup
-from patchright.async_api import async_playwright
+from camoufox.async_api import AsyncCamoufox
 
 SORT_MAP_API = {
     "recent": "createdat.desc",
@@ -197,13 +197,9 @@ async def _scrape_web(
         print("[trustpilot] no proxy — direct connection", flush=True)
 
     page_num = 1
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        ctx_opts: dict = {}
-        if proxy:
-            ctx_opts["proxy"] = {"server": proxy}
-        context = await browser.new_context(**ctx_opts)
-        page = await context.new_page()
+    proxy_opts = {"server": proxy} if proxy else None
+    async with AsyncCamoufox(headless=True, proxy=proxy_opts) as browser:
+        page = await browser.new_page()
 
         while len(records) < max_reviews:
             url = f"{product_url}?sort={sort_param}&page={page_num}"
@@ -247,8 +243,6 @@ async def _scrape_web(
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1.5)
-
-        await browser.close()
 
     return records[:max_reviews]
 

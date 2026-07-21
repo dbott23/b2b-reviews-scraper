@@ -6,7 +6,8 @@ from datetime import datetime
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+
+from src.scrapers._stealth import apply_stealth
 
 SORT_MAP = {
     "recent": "most_recent",
@@ -131,7 +132,7 @@ async def scrape(
             context_opts["proxy"] = {"server": proxy_url}
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
-        await stealth_async(page)
+        await apply_stealth(page)
 
         product_url = await _search_product_url(page, company)
         if not product_url:

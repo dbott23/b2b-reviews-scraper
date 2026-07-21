@@ -50,8 +50,8 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
 
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(3)
+            await page.goto(url, wait_until="commit", timeout=60000)
+            await asyncio.sleep(5)
             html = await page.content()
         except Exception as e:
             print(f"[capterra] search navigation failed: {e}", flush=True)

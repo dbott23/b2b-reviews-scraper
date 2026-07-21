@@ -217,8 +217,8 @@ async def _scrape_web(
         while len(records) < max_reviews:
             url = f"{product_url}?sort={sort_param}&page={page_num}"
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                await asyncio.sleep(3)
+                await page.goto(url, wait_until="commit", timeout=60000)
+                await asyncio.sleep(5)
                 html = await page.content()
             except Exception as e:
                 print(f"[trustpilot] navigation failed page {page_num}: {e}", flush=True)

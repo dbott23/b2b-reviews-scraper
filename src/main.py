@@ -29,6 +29,8 @@ async def main() -> None:
         max_per_platform: int = int(inp.get("maxReviewsPerPlatform") or 50)
         sort_by: str = inp.get("sortBy") or "recent"
         min_rating: int | None = inp.get("minRating")
+        trustpilot_api_key: str | None = inp.get("trustpilotApiKey") or None
+        proxy_input = inp.get("proxyConfiguration")
 
         if not companies:
             await Actor.fail(status_message="Input must include at least one company name.")
@@ -39,12 +41,9 @@ async def main() -> None:
             await Actor.fail(status_message=f"Unknown platform(s): {unknown}. Use g2, capterra, trustpilot.")
             return
 
-        # Set up proxy — helps bypass anti-bot on review sites
-        # Residential proxies (groups=["RESIDENTIAL"]) work best but require a paid plan
-        # Falls back to datacenter proxies automatically if residential unavailable
         proxy_url: str | None = None
         try:
-            proxy_config = await Actor.create_proxy_configuration()
+            proxy_config = await Actor.create_proxy_configuration(proxy_input) if proxy_input else await Actor.create_proxy_configuration()
             proxy_url = await proxy_config.new_url() if proxy_config else None
         except Exception as exc:
             Actor.log.warning(f"Proxy setup failed ({exc}) — running without proxy")
@@ -70,12 +69,14 @@ async def main() -> None:
                 scrape_fn = SCRAPER_MAP[platform]
 
                 try:
+                    extra = {"api_key": trustpilot_api_key} if platform == "trustpilot" else {}
                     records = await scrape_fn(
                         company=company,
                         max_reviews=max_per_platform,
                         sort_by=sort_by,
                         min_rating=min_rating,
                         proxy_url=proxy_url,
+                        **extra,
                     )
                 except Exception as exc:
                     Actor.log.warning(f"Error scraping {platform} for {company}: {exc}")

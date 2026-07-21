@@ -114,6 +114,7 @@ async def scrape(
     sort_by: str = "recent",
     min_rating: int | None = None,
     proxy_url: str | None = None,
+    **_kwargs,
 ) -> list[dict]:
     records: list[dict] = []
 

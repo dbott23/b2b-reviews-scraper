@@ -202,7 +202,30 @@ async def scrape(
                 print(f"[capterra] reviews page {page_num}: no content or still challenge — stopping", flush=True)
                 break
 
-            print(f"[capterra] reviews page {page_num} html preview: {html[:300]}", flush=True)
+            # Check for __NEXT_DATA__ (Capterra is Next.js)
+            nd_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
+            if nd_match:
+                import json as _json
+                try:
+                    nd = _json.loads(nd_match.group(1))
+                    pp = nd.get("props", {}).get("pageProps", {})
+                    print(f"[capterra] __NEXT_DATA__ pageProps keys: {list(pp.keys())}", flush=True)
+                    reviews_nd = pp.get("reviews") or pp.get("reviewList") or []
+                    print(f"[capterra] __NEXT_DATA__ reviews count: {len(reviews_nd)}", flush=True)
+                    if reviews_nd:
+                        print(f"[capterra] first review keys: {list(reviews_nd[0].keys())}", flush=True)
+                except Exception as e:
+                    print(f"[capterra] __NEXT_DATA__ parse error: {e}", flush=True)
+            else:
+                print("[capterra] no __NEXT_DATA__", flush=True)
+                # Log body around "review" keyword
+                idx = html.lower().find("review")
+                if idx >= 0:
+                    print(f"[capterra] review context: {html[max(0,idx-50):idx+300]}", flush=True)
+                # Log data-testid values
+                testids = re.findall(r'data-testid=["\']([^"\']+)["\']', html[:200000])
+                print(f"[capterra] data-testid values: {list(set(testids))[:20]}", flush=True)
+
             page_records = _parse_reviews(html, company, product_url)
             print(f"[capterra] reviews page {page_num}: {len(page_records)} records parsed", flush=True)
             if not page_records:

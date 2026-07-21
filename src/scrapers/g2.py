@@ -159,6 +159,7 @@ async def scrape(
             ),
             "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
         }
+        # Use proxy if provided, but skip for now to test direct connection
         if proxy_url:
             context_opts["proxy"] = {"server": proxy_url}
         print(f"[g2] launching browser, proxy={'yes' if proxy_url else 'no'}", flush=True)
@@ -166,9 +167,34 @@ async def scrape(
         page = await context.new_page()
         await apply_stealth(page)
 
-        slug = await _find_product_slug(page, company)
-        g2_html_snippet = await page.content()
-        print(f"[g2] slug={slug} page_title={await page.title()!r} html_len={len(g2_html_snippet)} snippet={g2_html_snippet[:300]!r}", flush=True)
+        # Use domcontentloaded with timeout; catch timeout and still grab content
+        try:
+            await page.goto(
+                f"https://www.g2.com/search?query={company}",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+        except Exception as e:
+            print(f"[g2] goto exception: {e!r}", flush=True)
+
+        await asyncio.sleep(3)
+        g2_html = await page.content()
+        title = await page.title()
+        print(f"[g2] after goto: title={title!r} html_len={len(g2_html)} url={page.url}", flush=True)
+        print(f"[g2] snippet: {g2_html[:400]!r}", flush=True)
+
+        # Try to find product link in whatever content we have
+        link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
+        if not link:
+            link = await page.query_selector("a[href*='/products/']")
+        slug = None
+        if link:
+            href = await link.get_attribute("href")
+            import re
+            m = re.search(r"/products/([^/]+)", href or "")
+            slug = m.group(1) if m else None
+
+        print(f"[g2] slug={slug}", flush=True)
         if not slug:
             await browser.close()
             return []

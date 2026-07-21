@@ -32,7 +32,7 @@ async def _search_product_url(company: str, proxy_url: str | None) -> str | None
     """Use plain HTTP to search Capterra — avoids Playwright fingerprint detection."""
     client_kwargs: dict = {"headers": _HEADERS, "follow_redirects": True, "timeout": 30}
     if proxy_url:
-        client_kwargs["proxies"] = {"all://": proxy_url}
+        client_kwargs["proxy"] = proxy_url
 
     async with httpx.AsyncClient(**client_kwargs) as client:
         try:

@@ -202,7 +202,7 @@ async def _scrape_web(
         "timeout": 30,
     }
     if proxy_url:
-        client_kwargs["proxies"] = {"all://": proxy_url}
+        client_kwargs["proxy"] = proxy_url
 
     page_num = 1
     async with httpx.AsyncClient(**client_kwargs) as client:

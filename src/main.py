@@ -5,7 +5,7 @@ import json
 
 from apify import Actor
 
-from .scrapers import capterra, g2, trustpilot
+from src.scrapers import capterra, g2, trustpilot
 
 CHECKPOINT_KEY = "SCRAPER_CHECKPOINT"
 

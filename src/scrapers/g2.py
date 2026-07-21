@@ -161,6 +161,7 @@ async def scrape(
         }
         if proxy_url:
             context_opts["proxy"] = {"server": proxy_url}
+        print(f"[g2] launching browser, proxy={'yes' if proxy_url else 'no'}", flush=True)
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
         await apply_stealth(page)

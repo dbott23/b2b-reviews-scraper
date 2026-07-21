@@ -202,7 +202,7 @@ async def _scrape_web(
             print(f"[trustpilot] using proxy: ...@{masked}", flush=True)
         else:
             print("[trustpilot] no proxy — direct connection", flush=True)
-        session_kwargs: dict = {"impersonate": "chrome136", "follow_redirects": True, "timeout": 30}
+        session_kwargs: dict = {"impersonate": "chrome136", "allow_redirects": True, "timeout": 30}
         if proxy:
             session_kwargs["proxies"] = {"https": proxy, "http": proxy}
 

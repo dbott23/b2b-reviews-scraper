@@ -36,7 +36,7 @@ async def _fetch(url: str, proxy: str | None) -> tuple[int, str]:
         print(f"[capterra] using proxy: ...@{masked}", flush=True)
     else:
         print("[capterra] no proxy — direct connection", flush=True)
-    kwargs: dict = {"impersonate": "chrome136", "follow_redirects": True, "timeout": 30}
+    kwargs: dict = {"impersonate": "chrome136", "allow_redirects": True, "timeout": 30}
     if proxy:
         kwargs["proxies"] = {"https": proxy, "http": proxy}
     async with AsyncSession() as s:

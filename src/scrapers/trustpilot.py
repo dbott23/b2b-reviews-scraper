@@ -1,12 +1,12 @@
-"""Trustpilot scraper — uses Playwright + JSON-LD data embedded in pages."""
+"""Trustpilot scraper — uses plain HTTP to extract server-rendered JSON-LD data."""
 
 import asyncio
 import json
 import re
 from datetime import datetime
 
+import httpx
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 
 SORT_MAP = {
     "recent": "recency",
@@ -15,29 +15,32 @@ SORT_MAP = {
     "lowest": "1_stars_first",
 }
 
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+}
 
 
 def _derive_slug(company: str) -> str:
-    """Derive a likely Trustpilot slug directly from the company name.
+    """Derive a likely Trustpilot slug from the company name.
 
-    Trustpilot slugs follow the pattern of the company's primary domain, e.g.
+    Trustpilot slugs match the company's primary domain, e.g.
     'Asana' → 'asana.com', 'monday.com' → 'monday.com'.
     """
     slug = company.lower().strip()
-    # Already looks like a domain
     if "." in slug:
         return slug
-    # Strip common suffixes and append .com
     slug = re.sub(r"[^a-z0-9-]", "", slug)
     return f"{slug}.com"
 
 
 def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
-    """Extract reviews from a Trustpilot page using embedded JSON-LD."""
+    """Extract reviews from JSON-LD embedded in the Trustpilot page."""
     soup = BeautifulSoup(html, "html.parser")
     records = []
 
@@ -94,46 +97,42 @@ async def scrape(
     min_rating: int | None = None,
     proxy_url: str | None = None,
 ) -> list[dict]:
+    slug = _derive_slug(company)
+    product_url = f"https://www.trustpilot.com/review/{slug}"
+    tp_sort = SORT_MAP.get(sort_by, "recency")
     records: list[dict] = []
+    page_num = 1
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        context_opts: dict = {
-            "user_agent": USER_AGENT,
-            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-        }
-        if proxy_url:
-            context_opts["proxy"] = {"server": proxy_url}
-        context = await browser.new_context(**context_opts)
-        page = await context.new_page()
+    proxy_dict = {"http://": proxy_url, "https://": proxy_url} if proxy_url else None
 
-        slug = _derive_slug(company)
-        product_url = f"https://www.trustpilot.com/review/{slug}"
-        tp_sort = SORT_MAP.get(sort_by, "recency")
-        page_num = 1
-
+    async with httpx.AsyncClient(
+        headers=HEADERS,
+        follow_redirects=True,
+        timeout=30,
+        proxies=proxy_dict,
+    ) as client:
         while len(records) < max_reviews:
-            params = f"sort={tp_sort}&page={page_num}"
+            params: dict = {"sort": tp_sort, "page": page_num}
             if min_rating:
-                params += f"&stars={min_rating}"
+                params["stars"] = min_rating
 
-            await page.goto(
-                f"{product_url}?{params}",
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-            await asyncio.sleep(2)
+            try:
+                resp = await client.get(product_url, params=params)
+            except Exception:
+                break
 
-            html = await page.content()
-            page_records = _parse_reviews(html, company, product_url)
+            if resp.status_code == 404:
+                break
+            if resp.status_code != 200:
+                await asyncio.sleep(2)
+                break
 
+            page_records = _parse_reviews(resp.text, company, product_url)
             if not page_records:
                 break
 
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1)
-
-        await browser.close()
 
     return records[:max_reviews]

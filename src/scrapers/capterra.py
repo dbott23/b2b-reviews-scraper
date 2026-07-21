@@ -1,4 +1,4 @@
-"""Capterra scraper — uses curl_cffi (Chrome TLS impersonation) for HTTP requests."""
+"""Capterra scraper — uses Playwright (real browser) for Cloudflare-protected pages."""
 
 import asyncio
 import re
@@ -6,7 +6,6 @@ from datetime import datetime
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
 from playwright.async_api import async_playwright
 
 from src.scrapers._stealth import apply_stealth
@@ -19,7 +18,7 @@ SORT_MAP = {
 }
 
 
-async def _get_proxy(get_proxy_url) -> str | None:
+async def _resolve_proxy(get_proxy_url) -> str | None:
     if not get_proxy_url:
         return None
     try:
@@ -28,30 +27,40 @@ async def _get_proxy(get_proxy_url) -> str | None:
         return None
 
 
-async def _fetch(url: str, proxy: str | None) -> tuple[int, str]:
-    """Fetch URL with Chrome TLS impersonation via curl_cffi."""
-    if proxy:
-        # Mask password for logging
-        masked = proxy.split("@")[-1] if "@" in proxy else proxy
-        print(f"[capterra] using proxy: ...@{masked}", flush=True)
-    else:
-        print("[capterra] no proxy — direct connection", flush=True)
-    kwargs: dict = {"impersonate": "chrome136", "allow_redirects": True, "timeout": 30}
-    if proxy:
-        kwargs["proxies"] = {"https": proxy, "http": proxy}
-    async with AsyncSession() as s:
-        resp = await s.get(url, **kwargs)
-        return resp.status_code, resp.text
-
-
 async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
-    proxy = await _get_proxy(get_proxy_url)
-    status, html = await _fetch(
-        f"https://www.capterra.com/search/?query={quote_plus(company)}", proxy
-    )
-    print(f"[capterra] search HTTP {status}, html length: {len(html)}", flush=True)
-    if status != 200:
-        return None
+    proxy = await _resolve_proxy(get_proxy_url)
+    if proxy:
+        masked = proxy.split("@")[-1] if "@" in proxy else proxy
+        print(f"[capterra] search using proxy: ...@{masked}", flush=True)
+
+    async with async_playwright() as pw:
+        launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
+        browser = await pw.chromium.launch(headless=True, args=launch_args)
+        ctx_opts: dict = {
+            "user_agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+            ),
+        }
+        if proxy:
+            ctx_opts["proxy"] = {"server": proxy}
+        context = await browser.new_context(**ctx_opts)
+        page = await context.new_page()
+        await apply_stealth(page)
+
+        url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
+            html = await page.content()
+        except Exception as e:
+            print(f"[capterra] search navigation failed: {e}", flush=True)
+            await browser.close()
+            return None
+        await browser.close()
+
+    status_hint = "200" if "capterra.com" in page.url else "redirect"
+    print(f"[capterra] search loaded ({status_hint}), html length: {len(html)}", flush=True)
 
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):

@@ -10,7 +10,6 @@ from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
 from playwright.async_api import async_playwright
 
 from src.scrapers._stealth import apply_stealth
@@ -186,58 +185,71 @@ async def _scrape_web(
     product_url = f"https://www.trustpilot.com/review/{domain}"
     records: list[dict] = []
 
-    page_num = 1
-    while len(records) < max_reviews:
-        url = f"{product_url}?sort={sort_param}&page={page_num}"
-
-        proxy = None
-        if get_proxy_url:
-            try:
-                proxy = await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
-            except Exception:
-                pass
-
-        if proxy:
-            masked = proxy.split("@")[-1] if "@" in proxy else proxy
-            print(f"[trustpilot] using proxy: ...@{masked}", flush=True)
-        else:
-            print("[trustpilot] no proxy — direct connection", flush=True)
-        session_kwargs: dict = {"impersonate": "chrome136", "allow_redirects": True, "timeout": 30}
-        if proxy:
-            session_kwargs["proxies"] = {"https": proxy, "http": proxy}
-
+    proxy = None
+    if get_proxy_url:
         try:
-            async with AsyncSession() as s:
-                resp = await s.get(url, **session_kwargs)
-                html = resp.text
-        except Exception as e:
-            print(f"[trustpilot] http request failed: {e}", flush=True)
-            break
+            proxy = await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
+        except Exception:
+            pass
 
-        print(f"[trustpilot] HTTP {resp.status_code}, url: {str(resp.url)[:80]}", flush=True)
+    if proxy:
+        masked = proxy.split("@")[-1] if "@" in proxy else proxy
+        print(f"[trustpilot] using proxy: ...@{masked}", flush=True)
+    else:
+        print("[trustpilot] no proxy — direct connection", flush=True)
 
-        m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
-        if m:
+    async with async_playwright() as pw:
+        launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
+        browser = await pw.chromium.launch(headless=True, args=launch_args)
+        ctx_opts: dict = {
+            "user_agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+            ),
+        }
+        if proxy:
+            ctx_opts["proxy"] = {"server": proxy}
+        context = await browser.new_context(**ctx_opts)
+        page = await context.new_page()
+        await apply_stealth(page)
+
+        page_num = 1
+        while len(records) < max_reviews:
+            url = f"{product_url}?sort={sort_param}&page={page_num}"
             try:
-                next_data = _json.loads(m.group(1))
-                pp = (next_data or {}).get("props", {}).get("pageProps", {})
-                print(f"[trustpilot] __NEXT_DATA__ found, pageProps keys: {list(pp.keys())}", flush=True)
-                page_records = _extract_next_data_reviews(next_data, company, product_url)
-                print(f"[trustpilot] extracted {len(page_records)} records from __NEXT_DATA__", flush=True)
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(3)
+                html = await page.content()
             except Exception as e:
-                print(f"[trustpilot] __NEXT_DATA__ parse error: {e}", flush=True)
+                print(f"[trustpilot] navigation failed page {page_num}: {e}", flush=True)
+                break
+
+            print(f"[trustpilot] loaded page {page_num}, html length: {len(html)}", flush=True)
+
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
+            if m:
+                try:
+                    next_data = _json.loads(m.group(1))
+                    pp = (next_data or {}).get("props", {}).get("pageProps", {})
+                    print(f"[trustpilot] __NEXT_DATA__ found, pageProps keys: {list(pp.keys())}", flush=True)
+                    page_records = _extract_next_data_reviews(next_data, company, product_url)
+                    print(f"[trustpilot] extracted {len(page_records)} records from __NEXT_DATA__", flush=True)
+                except Exception as e:
+                    print(f"[trustpilot] __NEXT_DATA__ parse error: {e}", flush=True)
+                    page_records = _parse_web_reviews(html, company, product_url)
+            else:
+                print("[trustpilot] no __NEXT_DATA__ found, falling back to HTML parse", flush=True)
                 page_records = _parse_web_reviews(html, company, product_url)
-        else:
-            print("[trustpilot] no __NEXT_DATA__ found, falling back to HTML parse", flush=True)
-            page_records = _parse_web_reviews(html, company, product_url)
-            print(f"[trustpilot] extracted {len(page_records)} records from HTML", flush=True)
+                print(f"[trustpilot] extracted {len(page_records)} records from HTML", flush=True)
 
-        if not page_records:
-            break
+            if not page_records:
+                break
 
-        records.extend(page_records)
-        page_num += 1
-        await asyncio.sleep(1.5)
+            records.extend(page_records)
+            page_num += 1
+            await asyncio.sleep(1.5)
+
+        await browser.close()
 
     return records[:max_reviews]
 

@@ -14,14 +14,17 @@ from camoufox.async_api import AsyncCamoufox
 
 from src.scrapers._proxy import parse_proxy
 
-_CHALLENGE_SIGNALS = ("just a moment", "verifying connection", "verifying you are human", "please wait")
+_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human", "please wait...")
 
 
 def _is_challenge(html: str, url: str) -> bool:
-    lower = html[:1000].lower()
+    import re as _re
+    m = _re.search(r"<title[^>]*>([^<]*)</title>", html[:600], _re.IGNORECASE)
+    title = m.group(1).lower().strip() if m else ""
     return (
-        any(s in lower for s in _CHALLENGE_SIGNALS)
+        any(s in title for s in _CHALLENGE_TITLES)
         or "__cf_chl_rt_tk" in url
+        or "waf-referrer-shim" in html[:500]
     )
 
 SORT_MAP_API = {
@@ -221,7 +224,7 @@ async def _scrape_web(
             except Exception as e:
                 print(f"[trustpilot] goto failed page {page_num}: {e}", flush=True)
 
-            for poll in range(30):
+            for poll in range(60):
                 try:
                     html = await page.content()
                     cur_url = page.url

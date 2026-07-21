@@ -17,16 +17,19 @@ SORT_MAP = {
     "lowest": "lowest_rating",
 }
 
-_CHALLENGE_SIGNALS = ("just a moment", "verifying connection", "verifying you are human", "please wait")
 FF_PREFS = {"security.sandbox.content.level": 0}
+_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human", "please wait...")
 
 
 def _is_challenge(html: str, url: str) -> bool:
-    lower = html[:1000].lower()
+    # Use the page <title> for precision — avoids false positives on real page content
+    import re as _re
+    m = _re.search(r"<title[^>]*>([^<]*)</title>", html[:600], _re.IGNORECASE)
+    title = m.group(1).lower().strip() if m else ""
     return (
-        any(s in lower for s in _CHALLENGE_SIGNALS)
+        any(s in title for s in _CHALLENGE_TITLES)
         or "__cf_chl_rt_tk" in url
-        or "challenge" in url.lower()
+        or "waf-referrer-shim" in html[:200]
     )
 
 

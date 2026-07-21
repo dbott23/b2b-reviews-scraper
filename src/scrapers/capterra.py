@@ -1,13 +1,24 @@
-"""Capterra scraper — uses Playwright for JS-rendered review pages."""
+"""Capterra scraper — uses httpx for search, Playwright for JS-rendered review pages."""
 
 import asyncio
 import re
 from datetime import datetime
+from urllib.parse import quote_plus
 
+import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
 from src.scrapers._stealth import apply_stealth
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 SORT_MAP = {
     "recent": "most_recent",
@@ -17,37 +28,31 @@ SORT_MAP = {
 }
 
 
-async def _search_product_url(page, company: str) -> str | None:
-    try:
-        await page.goto(
-            f"https://www.capterra.com/search/?query={company}",
-            wait_until="commit",
-            timeout=30000,
-        )
-    except Exception:
-        return None
+async def _search_product_url(company: str, proxy_url: str | None) -> str | None:
+    """Use plain HTTP to search Capterra — avoids Playwright fingerprint detection."""
+    client_kwargs: dict = {"headers": _HEADERS, "follow_redirects": True, "timeout": 30}
+    if proxy_url:
+        client_kwargs["proxies"] = {"all://": proxy_url}
 
-    # Wait for DOM content on slow proxy connections (commit fires on first byte only)
-    try:
-        await page.wait_for_load_state("domcontentloaded", timeout=60000)
-    except Exception:
-        pass
-    await asyncio.sleep(5)
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        try:
+            resp = await client.get(
+                f"https://www.capterra.com/search/?query={quote_plus(company)}"
+            )
+            html = resp.text
+        except Exception as e:
+            print(f"[capterra] search request failed: {e}", flush=True)
+            return None
 
-    hrefs: list[str] = await page.evaluate("""
-        () => Array.from(document.querySelectorAll('a[href]'))
-                   .map(a => a.getAttribute('href'))
-                   .filter(h => h)
-    """)
-
-    product_hrefs = [h for h in hrefs if any(pat in h for pat in ["/p/", "/reviews/", "/software/"])]
-    print(f"[capterra] page title: {await page.title()!r}, url: {page.url}", flush=True)
-    print(f"[capterra] total links: {len(hrefs)}, product-like links: {product_hrefs[:5]}", flush=True)
-
-    for href in hrefs:
+    print(f"[capterra] search HTTP {resp.status_code}, html length: {len(html)}", flush=True)
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
         if any(pat in href for pat in ["/p/", "/reviews/", "/software/"]):
+            print(f"[capterra] found product link: {href}", flush=True)
             return "https://www.capterra.com" + href if href.startswith("/") else href
 
+    print("[capterra] no product link found in search HTML", flush=True)
     return None
 
 
@@ -138,6 +143,10 @@ async def scrape(
 ) -> list[dict]:
     records: list[dict] = []
 
+    product_url = await _search_product_url(company, proxy_url)
+    if not product_url:
+        return []
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
         context_opts: dict = {
@@ -151,11 +160,6 @@ async def scrape(
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
         await apply_stealth(page)
-
-        product_url = await _search_product_url(page, company)
-        if not product_url:
-            await browser.close()
-            return []
 
         # Build reviews URL — product_url may already contain /reviews/
         if "/reviews" in product_url:

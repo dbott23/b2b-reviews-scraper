@@ -179,68 +179,61 @@ async def _scrape_web(
     min_rating: int | None,
     proxy_url: str | None,
 ) -> list[dict]:
+    import json as _json
     domain = _derive_domain(company)
     sort_param = {"recent": "recency", "highest": "stars_desc", "lowest": "stars_asc"}.get(sort_by, "recency")
     product_url = f"https://www.trustpilot.com/review/{domain}"
     records: list[dict] = []
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
-        context_opts: dict = {
-            "user_agent": (
+    # Use plain HTTP requests — Trustpilot is Next.js SSR so __NEXT_DATA__ is in the
+    # initial HTML response. A simple GET with browser headers avoids Playwright
+    # fingerprint detection entirely.
+    client_kwargs: dict = {
+        "headers": {
+            "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ),
-            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-            "viewport": {"width": 1440, "height": 900},
-        }
-        if proxy_url:
-            context_opts["proxy"] = {"server": proxy_url}
-        context = await browser.new_context(**context_opts)
-        page = await context.new_page()
-        await apply_stealth(page)
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+        },
+        "follow_redirects": True,
+        "timeout": 30,
+    }
+    if proxy_url:
+        client_kwargs["proxies"] = {"all://": proxy_url}
 
-        page_num = 1
+    page_num = 1
+    async with httpx.AsyncClient(**client_kwargs) as client:
         while len(records) < max_reviews:
             url = f"{product_url}?sort={sort_param}&page={page_num}"
             if min_rating:
                 url += f"&stars={min_rating}"
 
             try:
-                await page.goto(url, wait_until="commit", timeout=30000)
+                resp = await client.get(url)
+                html = resp.text
             except Exception as e:
-                print(f"[trustpilot] goto failed: {e}", flush=True)
+                print(f"[trustpilot] http request failed: {e}", flush=True)
                 break
 
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=60000)
-            except Exception:
-                pass
-            await asyncio.sleep(3)
+            print(f"[trustpilot] HTTP {resp.status_code}, url: {str(resp.url)[:80]}", flush=True)
 
-            page_title = await page.title()
-            print(f"[trustpilot] page title: {page_title!r}, url: {page.url}", flush=True)
-
-            # Prefer __NEXT_DATA__ JSON — it's stable across HTML class renames
-            next_data = await page.evaluate("""
-                () => {
-                    const el = document.getElementById('__NEXT_DATA__');
-                    if (!el) return null;
-                    try { return JSON.parse(el.textContent); } catch(e) { return null; }
-                }
-            """)
-
-            if next_data:
-                pp = (next_data or {}).get("props", {}).get("pageProps", {})
-                print(f"[trustpilot] __NEXT_DATA__ found, pageProps keys: {list(pp.keys())}", flush=True)
-                page_records = _extract_next_data_reviews(next_data, company, product_url)
-                print(f"[trustpilot] extracted {len(page_records)} records from __NEXT_DATA__", flush=True)
+            # Extract __NEXT_DATA__ from server-rendered HTML
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
+            if m:
+                try:
+                    next_data = _json.loads(m.group(1))
+                    pp = (next_data or {}).get("props", {}).get("pageProps", {})
+                    print(f"[trustpilot] __NEXT_DATA__ found, pageProps keys: {list(pp.keys())}", flush=True)
+                    page_records = _extract_next_data_reviews(next_data, company, product_url)
+                    print(f"[trustpilot] extracted {len(page_records)} records from __NEXT_DATA__", flush=True)
+                except Exception as e:
+                    print(f"[trustpilot] __NEXT_DATA__ parse error: {e}", flush=True)
+                    page_records = _parse_web_reviews(html, company, product_url)
             else:
                 print("[trustpilot] no __NEXT_DATA__ found, falling back to HTML parse", flush=True)
-                html = await page.content()
                 page_records = _parse_web_reviews(html, company, product_url)
                 print(f"[trustpilot] extracted {len(page_records)} records from HTML", flush=True)
 
@@ -250,8 +243,6 @@ async def _scrape_web(
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1.5)
-
-        await browser.close()
 
     return records[:max_reviews]
 

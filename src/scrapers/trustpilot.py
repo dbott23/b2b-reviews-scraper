@@ -177,7 +177,7 @@ async def _scrape_web(
     max_reviews: int,
     sort_by: str,
     min_rating: int | None,
-    proxy_url: str | None,
+    get_proxy_url=None,
 ) -> list[dict]:
     import json as _json
     domain = _derive_domain(company)
@@ -185,32 +185,28 @@ async def _scrape_web(
     product_url = f"https://www.trustpilot.com/review/{domain}"
     records: list[dict] = []
 
-    # Use plain HTTP requests — Trustpilot is Next.js SSR so __NEXT_DATA__ is in the
-    # initial HTML response. A simple GET with browser headers avoids Playwright
-    # fingerprint detection entirely.
-    client_kwargs: dict = {
-        "headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-        },
-        "follow_redirects": True,
-        "timeout": 30,
+    _headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
     }
-    # Note: residential proxies cause 403 on Trustpilot's CDN; httpx without proxy works fine
-    # proxy_url intentionally not applied here
 
     page_num = 1
-    async with httpx.AsyncClient(**client_kwargs) as client:
-        while len(records) < max_reviews:
-            url = f"{product_url}?sort={sort_param}&page={page_num}"
-            if min_rating:
-                url += f"&stars={min_rating}"
-
+    while len(records) < max_reviews:
+        url = f"{product_url}?sort={sort_param}&page={page_num}"
+        client_kwargs: dict = {"headers": _headers, "follow_redirects": True, "timeout": 30}
+        if get_proxy_url:
+            try:
+                purl = await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
+                if purl:
+                    client_kwargs["proxy"] = purl
+            except Exception:
+                pass
+        async with httpx.AsyncClient(**client_kwargs) as client:
             try:
                 resp = await client.get(url)
                 html = resp.text
@@ -220,7 +216,6 @@ async def _scrape_web(
 
             print(f"[trustpilot] HTTP {resp.status_code}, url: {str(resp.url)[:80]}", flush=True)
 
-            # Extract __NEXT_DATA__ from server-rendered HTML
             m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
             if m:
                 try:
@@ -324,8 +319,10 @@ async def scrape(
     min_rating: int | None = None,
     proxy_url: str | None = None,
     api_key: str | None = None,
+    get_proxy_url=None,
     **_kwargs,
 ) -> list[dict]:
     if api_key:
         return await _scrape_api(company, max_reviews, sort_by, min_rating, api_key)
-    return await _scrape_web(company, max_reviews, sort_by, min_rating, proxy_url)
+    _get_proxy = get_proxy_url or ((lambda: proxy_url) if proxy_url else None)
+    return await _scrape_web(company, max_reviews, sort_by, min_rating, _get_proxy)

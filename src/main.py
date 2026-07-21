@@ -85,8 +85,7 @@ async def main() -> None:
                     extra: dict = {}
                     if platform == "trustpilot" and trustpilot_api_key:
                         extra["api_key"] = trustpilot_api_key
-                    # G2 gets a fresh-URL callable so it can rotate per page on blocks
-                    if platform == "g2" and proxy_config:
+                    if proxy_config:
                         extra["get_proxy_url"] = proxy_config.new_url
                     records = await scrape_fn(
                         company=company,

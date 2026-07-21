@@ -43,10 +43,26 @@ async def main() -> None:
 
         proxy_url: str | None = None
         try:
-            proxy_config = await Actor.create_proxy_configuration(proxy_input) if proxy_input else await Actor.create_proxy_configuration()
+            if proxy_input:
+                proxy_config = await Actor.create_proxy_configuration(proxy_input)
+            else:
+                # Prefer residential proxies — datacenter IPs are blocked by G2/Capterra/Trustpilot
+                try:
+                    proxy_config = await Actor.create_proxy_configuration({"groups": ["RESIDENTIAL"]})
+                except Exception:
+                    proxy_config = await Actor.create_proxy_configuration()
             proxy_url = await proxy_config.new_url() if proxy_config else None
         except Exception as exc:
             Actor.log.warning(f"Proxy setup failed ({exc}) — running without proxy")
+
+        if proxy_url:
+            is_residential = "RESIDENTIAL" in str(proxy_url).upper() or (proxy_input and "RESIDENTIAL" in str(proxy_input).upper())
+            if not is_residential and not trustpilot_api_key:
+                Actor.log.warning(
+                    "Using datacenter proxies — G2, Capterra, and Trustpilot block datacenter IPs. "
+                    "For reliable results: enable residential proxies in Proxy configuration, "
+                    "or provide a Trustpilot API key for Trustpilot scraping."
+                )
 
         Actor.log.info(f"Proxy: {'enabled (' + str(proxy_url)[:40] + '...)' if proxy_url else 'disabled'}")
 

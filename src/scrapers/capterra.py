@@ -27,23 +27,18 @@ async def _search_product_url(page, company: str) -> str | None:
     except Exception:
         return None
 
-    # Wait for any product card links to appear (JS-rendered)
-    for selector in [
-        "a[href*='/p/']",
-        "a[href*='/reviews/']",
-        "a[href*='/software/']",
-        "[data-testid*='result'] a",
-        ".card a[href]",
-    ]:
-        try:
-            await page.wait_for_selector(selector, timeout=8000)
-            link = await page.query_selector(selector)
-            if link:
-                href = await link.get_attribute("href") or ""
-                if href:
-                    return "https://www.capterra.com" + href if href.startswith("/") else href
-        except Exception:
-            continue
+    # Wait for the page to finish loading, then extract all links via JS
+    await asyncio.sleep(5)
+
+    hrefs: list[str] = await page.evaluate("""
+        () => Array.from(document.querySelectorAll('a[href]'))
+                   .map(a => a.getAttribute('href'))
+                   .filter(h => h)
+    """)
+
+    for href in hrefs:
+        if any(pat in href for pat in ["/p/", "/reviews/", "/software/"]):
+            return "https://www.capterra.com" + href if href.startswith("/") else href
 
     return None
 

@@ -183,61 +183,69 @@ async def scrape(
         browser_ref: list = []
         page = await _new_context(pw, browser_ref)
 
-        # Search for the product — rotate proxy if blocked
-        for attempt in range(2):
-            # Pre-warm: visit homepage first to build a realistic browsing history
-            try:
-                await page.goto("https://www.g2.com/", wait_until="domcontentloaded", timeout=20000)
-                await asyncio.sleep(2)
-            except Exception:
-                pass
+        # Derive product slug directly from company name — avoids an extra DataDome-exposed search page
+        slug = re.sub(r"[^a-z0-9]+", "-", company.lower()).strip("-")
 
+        # Verify the slug resolves — try the direct reviews URL first, fall back to search
+        product_url_candidate = f"https://www.g2.com/products/{slug}/reviews"
+        resolved_slug = None
+
+        for attempt in range(2):
             try:
-                await page.goto(
-                    f"https://www.g2.com/search?query={company}",
-                    wait_until="domcontentloaded",
-                    timeout=25000,
-                )
+                await page.goto(product_url_candidate, wait_until="domcontentloaded", timeout=30000)
             except Exception:
                 pass
 
             try:
                 await page.wait_for_function(
-                    "document.title !== 'g2.com' && document.title !== '' && document.title !== 'Just a moment...'",
-                    timeout=25000,
+                    "document.title !== '' && document.title !== 'Just a moment...'",
+                    timeout=15000,
                 )
             except Exception:
                 pass
 
             await asyncio.sleep(3)
 
-            if not await _is_blocked(page):
+            if await _is_blocked(page):
+                if attempt == 0:
+                    page = await _new_context(pw, browser_ref)
+                    continue
                 break
 
-            if attempt == 0:
-                # Rotate proxy and retry with a fresh browser context
-                page = await _new_context(pw, browser_ref)
+            # Check if we landed on a real product page or got redirected to search
+            current_url = page.url
+            m = re.search(r"/products/([^/?#]+)", current_url)
+            if m:
+                resolved_slug = m.group(1)
+            else:
+                # Try search as fallback
+                try:
+                    await page.goto(
+                        f"https://www.g2.com/search?query={company}",
+                        wait_until="domcontentloaded",
+                        timeout=25000,
+                    )
+                    await asyncio.sleep(3)
+                except Exception:
+                    pass
+                link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
+                if not link:
+                    link = await page.query_selector("a[href*='/products/']")
+                if link:
+                    href = await link.get_attribute("href") or ""
+                    m2 = re.search(r"/products/([^/?#]+)", href)
+                    if m2:
+                        resolved_slug = m2.group(1)
+            break
 
-        if await _is_blocked(page):
+        if not resolved_slug:
             if browser_ref:
                 await browser_ref[0].close()
             return []
 
-        link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
-        if not link:
-            link = await page.query_selector("a[href*='/products/']")
-        slug = None
-        if link:
-            href = await link.get_attribute("href")
-            m = re.search(r"/products/([^/]+)", href or "")
-            slug = m.group(1) if m else None
+        slug = resolved_slug
 
-        if not slug:
-            if browser_ref:
-                await browser_ref[0].close()
-            return []
-
-        product_url = f"https://www.g2.com/products/{slug}/reviews"
+        product_url = f"https://www.g2.com/products/{resolved_slug}/reviews"
         g2_sort = SORT_MAP.get(sort_by, "most_recent")
         page_num = 1
 

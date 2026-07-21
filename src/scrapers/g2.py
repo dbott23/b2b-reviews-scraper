@@ -143,18 +143,22 @@ async def scrape(
     max_reviews: int = 50,
     sort_by: str = "recent",
     min_rating: int | None = None,
+    proxy_url: str | None = None,
 ) -> list[dict]:
     records: list[dict] = []
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        context = await browser.new_context(
-            user_agent=(
+        context_opts: dict = {
+            "user_agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
             ),
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-        )
+            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+        }
+        if proxy_url:
+            context_opts["proxy"] = {"server": proxy_url}
+        context = await browser.new_context(**context_opts)
         page = await context.new_page()
 
         slug = await _find_product_slug(page, company)

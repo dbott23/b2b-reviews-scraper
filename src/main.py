@@ -1,7 +1,7 @@
 """B2B Reviews Scraper — orchestrates G2, Capterra, and Trustpilot scrapers."""
 
 import asyncio
-import json
+import sys
 
 from apify import Actor
 
@@ -17,8 +17,12 @@ SCRAPER_MAP = {
 
 
 async def main() -> None:
+    print("B2B Reviews Scraper starting", flush=True)
     async with Actor:
+        Actor.log.info("Actor initialized")
+
         inp = await Actor.get_input() or {}
+        Actor.log.info(f"Input received: {list(inp.keys())}")
 
         companies: list[str] = inp.get("companies") or []
         platforms: list[str] = inp.get("platforms") or ["g2", "capterra", "trustpilot"]
@@ -35,6 +39,18 @@ async def main() -> None:
             await Actor.fail(status_message=f"Unknown platform(s): {unknown}. Use g2, capterra, trustpilot.")
             return
 
+        # Set up proxy — Apify residential proxies help bypass anti-bot on review sites
+        try:
+            proxy_config = await Actor.create_proxy_configuration(
+                groups=["RESIDENTIAL"],
+            )
+            proxy_url = await proxy_config.new_url() if proxy_config else None
+        except Exception:
+            Actor.log.warning("No proxy available — running without proxy (may be blocked by review sites)")
+            proxy_url = None
+
+        Actor.log.info(f"Proxy: {'enabled' if proxy_url else 'disabled'}")
+
         # Checkpoint: track which (company, platform) pairs are done
         checkpoint = await Actor.get_value(CHECKPOINT_KEY) or {}
         done: set[str] = set(checkpoint.get("done") or [])
@@ -42,8 +58,6 @@ async def main() -> None:
 
         async def save_checkpoint() -> None:
             await Actor.set_value(CHECKPOINT_KEY, {"done": list(done), "total_pushed": total_pushed})
-
-        Actor.on(Actor.Event.MIGRATING, lambda: asyncio.ensure_future(save_checkpoint()))
 
         for company in companies:
             for platform in platforms:
@@ -61,6 +75,7 @@ async def main() -> None:
                         max_reviews=max_per_platform,
                         sort_by=sort_by,
                         min_rating=min_rating,
+                        proxy_url=proxy_url,
                     )
                 except Exception as exc:
                     Actor.log.warning(f"Error scraping {platform} for {company}: {exc}")
@@ -74,9 +89,6 @@ async def main() -> None:
                 done.add(pair_key)
                 await save_checkpoint()
 
-                Actor.log.info(
-                    f"  → {len(records)} reviews from {platform} for {company} "
-                    f"(total: {total_pushed})"
-                )
+                Actor.log.info(f"  → {len(records)} reviews from {platform} for {company} (total: {total_pushed})")
 
         Actor.log.info(f"Done. Total reviews pushed: {total_pushed}")

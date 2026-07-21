@@ -21,23 +21,19 @@ USER_AGENT = (
 )
 
 
-async def _find_slug(page, company: str) -> str | None:
-    """Search Trustpilot and return the company slug (e.g. 'asana.com')."""
-    await page.goto(
-        f"https://www.trustpilot.com/search?query={company}",
-        wait_until="domcontentloaded",
-        timeout=30000,
-    )
-    # Wait for search results to appear
-    try:
-        await page.wait_for_selector("a[href^='/review/']", timeout=8000)
-    except Exception:
-        pass
-    link = await page.query_selector("a[href^='/review/']")
-    if not link:
-        return None
-    href = await link.get_attribute("href")
-    return href.split("/review/")[-1].rstrip("/") if href else None
+def _derive_slug(company: str) -> str:
+    """Derive a likely Trustpilot slug directly from the company name.
+
+    Trustpilot slugs follow the pattern of the company's primary domain, e.g.
+    'Asana' → 'asana.com', 'monday.com' → 'monday.com'.
+    """
+    slug = company.lower().strip()
+    # Already looks like a domain
+    if "." in slug:
+        return slug
+    # Strip common suffixes and append .com
+    slug = re.sub(r"[^a-z0-9-]", "", slug)
+    return f"{slug}.com"
 
 
 def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
@@ -111,11 +107,7 @@ async def scrape(
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
 
-        slug = await _find_slug(page, company)
-        if not slug:
-            await browser.close()
-            return []
-
+        slug = _derive_slug(company)
         product_url = f"https://www.trustpilot.com/review/{slug}"
         tp_sort = SORT_MAP.get(sort_by, "recency")
         page_num = 1
@@ -128,10 +120,9 @@ async def scrape(
             await page.goto(
                 f"{product_url}?{params}",
                 wait_until="domcontentloaded",
-                timeout=30000,
+                timeout=60000,
             )
-            # Wait briefly for JS to hydrate JSON-LD
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
             html = await page.content()
             page_records = _parse_reviews(html, company, product_url)

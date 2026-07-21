@@ -19,7 +19,7 @@ async def _find_product_slug(page, company: str) -> str | None:
     await page.goto(
         f"https://www.g2.com/search?query={company}",
         wait_until="domcontentloaded",
-        timeout=30000,
+        timeout=60000,
     )
     # Product cards link to /products/<slug>/reviews
     link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
@@ -175,7 +175,7 @@ async def scrape(
             if min_rating:
                 url += f"&filters[star_rating]={min_rating}"
 
-            await page.goto(url, wait_until="networkidle", timeout=30000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             # G2 lazy-loads — scroll to trigger reviews
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(1)

@@ -103,13 +103,11 @@ async def scrape(
     records: list[dict] = []
     page_num = 1
 
-    proxy_dict = {"http://": proxy_url, "https://": proxy_url} if proxy_url else None
-
     async with httpx.AsyncClient(
         headers=HEADERS,
         follow_redirects=True,
         timeout=30,
-        proxies=proxy_dict,
+        proxy=proxy_url,
     ) as client:
         while len(records) < max_reviews:
             params: dict = {"sort": tp_sort, "page": page_num}

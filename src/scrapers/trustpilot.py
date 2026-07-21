@@ -219,12 +219,18 @@ async def _scrape_web(
             try:
                 await page.goto(url, wait_until="commit", timeout=60000)
                 await asyncio.sleep(5)
+                # Wait for Cloudflare challenge redirect to settle
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
                 html = await page.content()
             except Exception as e:
                 print(f"[trustpilot] navigation failed page {page_num}: {e}", flush=True)
                 break
 
-            print(f"[trustpilot] loaded page {page_num}, html length: {len(html)}", flush=True)
+            print(f"[trustpilot] loaded page {page_num}, url: {page.url}, html length: {len(html)}", flush=True)
+            print(f"[trustpilot] html preview: {html[:300]}", flush=True)
 
             m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
             if m:

@@ -52,15 +52,22 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
         try:
             await page.goto(url, wait_until="commit", timeout=60000)
             await asyncio.sleep(5)
+            # Wait for Cloudflare challenge redirect to settle
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            except Exception:
+                pass
             html = await page.content()
         except Exception as e:
             print(f"[capterra] search navigation failed: {e}", flush=True)
             await browser.close()
             return None
+
+        final_url = page.url
         await browser.close()
 
-    status_hint = "200" if "capterra.com" in page.url else "redirect"
-    print(f"[capterra] search loaded ({status_hint}), html length: {len(html)}", flush=True)
+    print(f"[capterra] final URL: {final_url}, html length: {len(html)}", flush=True)
+    print(f"[capterra] html preview: {html[:300]}", flush=True)
 
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):

@@ -265,7 +265,10 @@ async def scrape(
                 pass
 
             await asyncio.sleep(4)
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            try:
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            except Exception:
+                pass
             await asyncio.sleep(2)
 
             if await _is_blocked(page):

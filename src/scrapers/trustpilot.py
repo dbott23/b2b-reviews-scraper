@@ -210,7 +210,7 @@ async def _scrape_web(
                 url += f"&stars={min_rating}"
 
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(url, wait_until="commit", timeout=30000)
             except Exception as e:
                 print(f"[trustpilot] goto failed: {e}", flush=True)
                 break

@@ -21,7 +21,7 @@ async def _search_product_url(page, company: str) -> str | None:
     try:
         await page.goto(
             f"https://www.capterra.com/search/?query={company}",
-            wait_until="domcontentloaded",
+            wait_until="commit",
             timeout=30000,
         )
     except Exception:
@@ -167,7 +167,7 @@ async def scrape(
                 url += f"&rating={min_rating}"
 
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(url, wait_until="commit", timeout=30000)
             except Exception:
                 break
             # Wait for review cards to render

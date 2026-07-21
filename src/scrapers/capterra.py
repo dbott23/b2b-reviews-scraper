@@ -163,7 +163,8 @@ async def scrape(
         print(f"[capterra] using proxy: ...@{masked}", flush=True)
 
     # Use ONE browser for search + reviews so CF/WAF cookies carry over
-    async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS) as browser:
+    # geoip=True is recommended when using a proxy (matches browser geolocation to proxy location)
+    async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS, geoip=True) as browser:
         page = await browser.new_page()
 
         # Search phase
@@ -177,7 +178,13 @@ async def scrape(
             print("[capterra] no product link found", flush=True)
             return []
 
-        # Reviews phase — same browser, CF cookies already set
+        # Navigate to the product page first (carries CF cookies from search)
+        # Then click through to reviews rather than a cold goto
+        print(f"[capterra] navigating to product page: {product_url}", flush=True)
+        await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)
+
+        # Now go to reviews — browser has legitimate capterra.com history
         if "/reviews" in product_url:
             reviews_url = product_url.rstrip("/") + "/"
         else:

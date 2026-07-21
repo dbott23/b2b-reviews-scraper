@@ -1,4 +1,8 @@
-"""G2 scraper — uses Playwright; G2 is JS-heavy with anti-bot measures."""
+"""G2 scraper — uses Playwright with stealth patches.
+
+Note: G2 uses DataDome bot detection. Results depend on whether the JS challenge
+resolves successfully. Residential proxies improve success rate.
+"""
 
 import asyncio
 import re
@@ -17,37 +21,17 @@ SORT_MAP = {
 }
 
 
-async def _find_product_slug(page, company: str) -> str | None:
-    await page.goto(
-        f"https://www.g2.com/search?query={company}",
-        wait_until="commit",
-        timeout=30000,
-    )
-    # Product cards link to /products/<slug>/reviews
-    link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
-    if not link:
-        # Try broader match
-        link = await page.query_selector("a[href*='/products/']")
-    if not link:
-        return None
-    href = await link.get_attribute("href")
-    m = re.search(r"/products/([^/]+)", href or "")
-    return m.group(1) if m else None
-
-
 def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     records = []
 
     for card in soup.select("[itemprop='review'], .paper.paper--white.paper--shadow"):
-        # Rating
         rating = None
         stars_el = card.select_one("[class*='stars'], meta[itemprop='ratingValue']")
         if stars_el:
             val = stars_el.get("content") or stars_el.get("data-rating") or ""
             m = re.search(r"(\d[\d.]*)", val)
             if not m:
-                # Count filled stars
                 filled = len(card.select(".star.star--filled, .fa-star"))
                 if filled:
                     rating = float(filled)
@@ -57,7 +41,6 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
                 except ValueError:
                     pass
 
-        # Title — prefer meta content attribute over text nodes
         title_el = card.select_one("[itemprop='name']")
         if title_el:
             title = title_el.get("content") or title_el.get_text(strip=True) or None
@@ -65,7 +48,6 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
             h3 = card.select_one("h3")
             title = h3.get_text(strip=True) if h3 else None
 
-        # Pros / cons — G2 splits into "What do you like best?" / "What do you dislike?"
         pros = cons = body = None
         for section in card.select("[data-field-name]"):
             field = section.get("data-field-name", "")
@@ -74,24 +56,18 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
                 pros = text
             elif "dislike" in field or "cons" in field:
                 cons = text
-        # Fallback body
         body_el = card.select_one("[itemprop='reviewBody']")
         if body_el:
             body = body_el.get_text(strip=True)
 
-        # Reviewer
         reviewer_el = card.select_one("[itemprop='author'], .link--header-color")
         reviewer_name = reviewer_el.get_text(strip=True) if reviewer_el else None
         title_el2 = card.select_one(".mt-4th")
         reviewer_title = title_el2.get_text(strip=True) if title_el2 else None
 
-        # Company size
         size_el = card.select_one("[class*='company-size'], [data-company-size]")
-        reviewer_company_size = (
-            size_el.get_text(strip=True) if size_el else None
-        )
+        reviewer_company_size = size_el.get_text(strip=True) if size_el else None
 
-        # Date
         date_el = card.select_one("time, [itemprop='datePublished']")
         date_str = ""
         if date_el:
@@ -101,7 +77,6 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
         except Exception:
             date = date_str or None
 
-        # Helpful count
         helpful = None
         helpful_el = card.select_one("[class*='helpful-count']")
         if helpful_el:
@@ -109,7 +84,6 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
             if m:
                 helpful = int(m.group())
 
-        # Review URL
         review_link = card.select_one("a[href*='/reviews/']")
         review_url = None
         if review_link:
@@ -159,15 +133,14 @@ async def scrape(
             ),
             "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
         }
-        # TEST: skip proxy to see if direct connection works
-        # if proxy_url:
-        #     context_opts["proxy"] = {"server": proxy_url}
-        print(f"[g2] launching browser, proxy=DISABLED FOR TEST (was: {'yes' if proxy_url else 'no'})", flush=True)
+        if proxy_url:
+            context_opts["proxy"] = {"server": proxy_url}
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
         await apply_stealth(page)
 
-        # Initial load — DataDome/Cloudflare will serve a JS challenge first
+        # Load search page; G2 uses DataDome bot detection which may require
+        # JS challenge resolution — wait for title change as signal
         try:
             await page.goto(
                 f"https://www.g2.com/search?query={company}",
@@ -177,19 +150,15 @@ async def scrape(
         except Exception:
             pass
 
-        # Wait up to 20s for challenge to resolve and redirect to real page
         try:
             await page.wait_for_function(
-                "document.title !== 'g2.com' && document.title !== ''",
-                timeout=20000,
+                "document.title !== 'g2.com' && document.title !== '' && document.title !== 'Just a moment...'",
+                timeout=25000,
             )
         except Exception:
             pass
 
         await asyncio.sleep(2)
-        g2_html = await page.content()
-        title = await page.title()
-        print(f"[g2] after challenge: title={title!r} html_len={len(g2_html)} url={page.url}", flush=True)
 
         link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
         if not link:
@@ -197,11 +166,9 @@ async def scrape(
         slug = None
         if link:
             href = await link.get_attribute("href")
-            import re as _re
-            m = _re.search(r"/products/([^/]+)", href or "")
+            m = re.search(r"/products/([^/]+)", href or "")
             slug = m.group(1) if m else None
 
-        print(f"[g2] slug={slug}", flush=True)
         if not slug:
             await browser.close()
             return []
@@ -215,10 +182,11 @@ async def scrape(
             if min_rating:
                 url += f"&filters[star_rating]={min_rating}"
 
-            await page.goto(url, wait_until="commit", timeout=30000)
-            # Let JS render after initial commit
+            try:
+                await page.goto(url, wait_until="commit", timeout=20000)
+            except Exception:
+                pass
             await asyncio.sleep(5)
-            # Scroll to trigger lazy-loaded reviews
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(2)
 

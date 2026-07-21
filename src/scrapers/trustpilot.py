@@ -43,11 +43,11 @@ async def scrape(
     order_by = SORT_MAP.get(sort_by, "createdat.desc")
     records: list[dict] = []
 
+    # Don't route API calls through proxy — official API doesn't need it
     async with httpx.AsyncClient(
         base_url=TP_API,
         follow_redirects=True,
         timeout=30,
-        proxy=proxy_url,
     ) as client:
         # Step 1: find business unit ID
         find_resp = await client.get(

@@ -58,7 +58,7 @@ async def _get_html(page, url: str, label: str, max_polls: int = 40) -> str:
         m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
         title = (m.group(1) if m else "?")[:60]
         print(f"[{label}] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
-        if html and len(html) > 500 and not challenge:
+        if html and len(html) > 50000 and not challenge:
             break
         await asyncio.sleep(4)
     return html

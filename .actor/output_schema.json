@@ -1,39 +1,41 @@
 {
-  "actorOutputSchemaVersion": 1,
-  "fields": [
-    { "name": "company",         "type": "string",  "description": "Company name as supplied in input" },
-    { "name": "platform",        "type": "string",  "description": "Review platform: g2 | capterra | trustpilot" },
-    { "name": "reviewer_name",   "type": "string",  "description": "Reviewer's display name" },
-    { "name": "reviewer_title",  "type": "string",  "description": "Reviewer's job title" },
-    { "name": "reviewer_company_size", "type": "string", "description": "Reviewer's company size band" },
-    { "name": "rating",          "type": "number",  "description": "Star rating out of 5" },
-    { "name": "title",           "type": "string",  "description": "Review headline" },
-    { "name": "body",            "type": "string",  "description": "Full review text" },
-    { "name": "pros",            "type": "string",  "description": "Pros section (G2/Capterra)" },
-    { "name": "cons",            "type": "string",  "description": "Cons section (G2/Capterra)" },
-    { "name": "date",            "type": "string",  "description": "Review date (ISO 8601)" },
-    { "name": "verified",        "type": "boolean", "description": "Whether the review is verified" },
-    { "name": "helpful_count",   "type": "integer", "description": "Number of helpful votes" },
-    { "name": "review_url",      "type": "string",  "description": "Direct URL to the review" },
-    { "name": "product_url",     "type": "string",  "description": "URL of the product/company page scraped" }
-  ],
-  "views": {
-    "overview": {
-      "title": "Reviews",
-      "transformation": { "fields": ["company", "platform", "rating", "reviewer_name", "reviewer_title", "title", "date", "verified"] },
-      "display": {
-        "component": "table",
-        "properties": {
-          "company":        { "label": "Company",   "format": "text" },
-          "platform":       { "label": "Platform",  "format": "text" },
-          "rating":         { "label": "Rating",    "format": "number" },
-          "reviewer_name":  { "label": "Reviewer",  "format": "text" },
-          "reviewer_title": { "label": "Title",     "format": "text" },
-          "title":          { "label": "Review",    "format": "text" },
-          "date":           { "label": "Date",      "format": "date" },
-          "verified":       { "label": "Verified",  "format": "boolean" }
+    "actorOutputSchemaVersion": 1,
+    "properties": {
+        "company":               { "title": "Company",          "type": "string",  "description": "Company name as supplied in input." },
+        "platform":              { "title": "Platform",         "type": "string",  "description": "Review platform: g2 | capterra | trustpilot." },
+        "reviewer_name":         { "title": "Reviewer",         "type": "string",  "description": "Reviewer's display name." },
+        "reviewer_title":        { "title": "Job Title",        "type": "string",  "description": "Reviewer's job title." },
+        "reviewer_company_size": { "title": "Company Size",     "type": "string",  "description": "Reviewer's company size band." },
+        "rating":                { "title": "Rating",           "type": "number",  "description": "Star rating out of 5." },
+        "title":                 { "title": "Review Title",     "type": "string",  "description": "Review headline." },
+        "body":                  { "title": "Body",             "type": "string",  "description": "Full review text." },
+        "pros":                  { "title": "Pros",             "type": "string",  "description": "Pros section (G2/Capterra)." },
+        "cons":                  { "title": "Cons",             "type": "string",  "description": "Cons section (G2/Capterra)." },
+        "date":                  { "title": "Date",             "type": "string",  "description": "Review date (ISO 8601)." },
+        "verified":              { "title": "Verified?",        "type": "boolean", "description": "Whether the review is verified." },
+        "helpful_count":         { "title": "Helpful Votes",    "type": "integer", "description": "Number of helpful votes." },
+        "review_url":            { "title": "Review URL",       "type": "string",  "description": "Direct URL to the review." },
+        "product_url":           { "title": "Product URL",      "type": "string",  "description": "URL of the product/company page scraped." }
+    },
+    "views": {
+        "overview": {
+            "title": "Reviews",
+            "transformation": {
+                "fields": ["company", "platform", "rating", "reviewer_name", "reviewer_title", "title", "date", "verified"]
+            },
+            "display": {
+                "component": "table",
+                "properties": {
+                    "company":        { "label": "Company" },
+                    "platform":       { "label": "Platform" },
+                    "rating":         { "label": "Rating" },
+                    "reviewer_name":  { "label": "Reviewer" },
+                    "reviewer_title": { "label": "Title" },
+                    "title":          { "label": "Review" },
+                    "date":           { "label": "Date" },
+                    "verified":       { "label": "Verified" }
+                }
+            }
         }
-      }
     }
-  }
 }

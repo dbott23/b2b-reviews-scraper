@@ -14,7 +14,7 @@ from camoufox.async_api import AsyncCamoufox
 
 from src.scrapers._proxy import parse_proxy
 
-_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human", "please wait...")
+_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human", "please wait", "attention required", "access denied", "403 forbidden", "enable javascript")
 
 
 def _is_challenge(html: str, url: str) -> bool:
@@ -231,8 +231,11 @@ async def _scrape_web(
                 except Exception:
                     html = ""
                     cur_url = ""
-                print(f"[trustpilot] poll {poll}: url={cur_url}, html_len={len(html)}", flush=True)
-                if html and len(html) > 500 and not _is_challenge(html, cur_url):
+                m_title = re.search(r"<title[^>]*>([^<]*)</title>", html[:1000], re.IGNORECASE)
+                title = (m_title.group(1) if m_title else "?")[:60]
+                challenge = _is_challenge(html, cur_url)
+                print(f"[trustpilot] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
+                if html and len(html) > 500 and not challenge:
                     break
                 await asyncio.sleep(4)
 

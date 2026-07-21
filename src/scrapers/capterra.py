@@ -18,7 +18,7 @@ SORT_MAP = {
 }
 
 FF_PREFS = {"security.sandbox.content.level": 0}
-_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human")
+_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human", "attention required", "please wait", "access denied", "403 forbidden", "enable javascript")
 
 
 def _is_challenge(html: str, url: str) -> bool:
@@ -145,46 +145,35 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     return records
 
 
-async def scrape(
+async def _try_scrape(
     company: str,
-    max_reviews: int = 50,
-    sort_by: str = "recent",
-    min_rating: int | None = None,
-    proxy_url: str | None = None,
-    get_proxy_url=None,
-    **_kwargs,
-) -> list[dict]:
+    max_reviews: int,
+    sort_by: str,
+    min_rating: int | None,
+    proxy: str | None,
+    attempt: int,
+) -> list[dict] | None:
+    """Single scrape attempt. Returns None if blocked at search phase (should retry with new proxy)."""
     records: list[dict] = []
+    search_url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
 
-    _get_proxy = get_proxy_url or ((lambda: proxy_url) if proxy_url else None)
-    proxy = await _resolve_proxy(_get_proxy)
-    if proxy:
-        masked = proxy.split("@")[-1] if "@" in proxy else proxy
-        print(f"[capterra] using proxy: ...@{masked}", flush=True)
-
-    # Use ONE browser for search + reviews so CF/WAF cookies carry over
-    # geoip=True is recommended when using a proxy (matches browser geolocation to proxy location)
     async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS, geoip=True) as browser:
         page = await browser.new_page()
 
-        # Search phase
-        search_url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
-        html = await _get_html(page, search_url, "capterra-search")
-        if not html:
-            return []
+        html = await _get_html(page, search_url, "capterra-search", max_polls=15)
+        if not html or _is_challenge(html, page.url):
+            print(f"[capterra] attempt {attempt}: search blocked by CF/WAF — will retry with new proxy", flush=True)
+            return None
 
         product_url = _extract_product_url(html)
         if not product_url:
-            print("[capterra] no product link found", flush=True)
-            return []
+            print(f"[capterra] attempt {attempt}: no product link found", flush=True)
+            return None
 
-        # Navigate to the product page first (carries CF cookies from search)
-        # Then click through to reviews rather than a cold goto
-        print(f"[capterra] navigating to product page: {product_url}", flush=True)
+        print(f"[capterra] attempt {attempt}: navigating to product page: {product_url}", flush=True)
         await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
         await asyncio.sleep(3)
 
-        # Now go to reviews — browser has legitimate capterra.com history
         if "/reviews" in product_url:
             reviews_url = product_url.rstrip("/") + "/"
         else:
@@ -202,10 +191,9 @@ async def scrape(
                 print(f"[capterra] reviews page {page_num}: no content or still challenge — stopping", flush=True)
                 break
 
-            # Check for __NEXT_DATA__ (Capterra is Next.js)
+            import json as _json
             nd_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
             if nd_match:
-                import json as _json
                 try:
                     nd = _json.loads(nd_match.group(1))
                     pp = nd.get("props", {}).get("pageProps", {})
@@ -218,11 +206,9 @@ async def scrape(
                     print(f"[capterra] __NEXT_DATA__ parse error: {e}", flush=True)
             else:
                 print("[capterra] no __NEXT_DATA__", flush=True)
-                # Log body around "review" keyword
                 idx = html.lower().find("review")
                 if idx >= 0:
                     print(f"[capterra] review context: {html[max(0,idx-50):idx+300]}", flush=True)
-                # Log data-testid values
                 testids = re.findall(r'data-testid=["\']([^"\']+)["\']', html[:200000])
                 print(f"[capterra] data-testid values: {list(set(testids))[:20]}", flush=True)
 
@@ -236,3 +222,30 @@ async def scrape(
             await asyncio.sleep(1.5)
 
     return records[:max_reviews]
+
+
+async def scrape(
+    company: str,
+    max_reviews: int = 50,
+    sort_by: str = "recent",
+    min_rating: int | None = None,
+    proxy_url: str | None = None,
+    get_proxy_url=None,
+    **_kwargs,
+) -> list[dict]:
+    _get_proxy = get_proxy_url or ((lambda: proxy_url) if proxy_url else None)
+
+    for attempt in range(1, 4):
+        proxy = await _resolve_proxy(_get_proxy)
+        if proxy:
+            masked = proxy.split("@")[-1] if "@" in proxy else proxy
+            print(f"[capterra] attempt {attempt}: using proxy ...@{masked}", flush=True)
+
+        result = await _try_scrape(company, max_reviews, sort_by, min_rating, proxy, attempt)
+        if result is not None:
+            return result
+        if attempt < 3:
+            print(f"[capterra] retrying with fresh proxy (attempt {attempt + 1}/3)...", flush=True)
+            await asyncio.sleep(2)
+
+    return []

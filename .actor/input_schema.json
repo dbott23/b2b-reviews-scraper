@@ -1,64 +1,59 @@
 {
-  "title": "B2B Reviews Scraper Input",
-  "description": "Scrape reviews from G2, Capterra, and Trustpilot.",
-  "type": "object",
-  "schemaVersion": 1,
-  "properties": {
-    "companies": {
-      "title": "Companies",
-      "description": "Company or product names to search for (e.g. 'Asana', 'monday.com').",
-      "type": "array",
-      "items": { "type": "string" },
-      "editor": "stringList",
-      "example": ["Asana", "Trello", "monday.com"]
+    "title": "B2B Reviews Scraper input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "companies": {
+            "title": "Companies",
+            "type": "array",
+            "description": "Company or product names to search for. Use the name as it appears on the review site (e.g. \"monday.com\", \"HubSpot CRM\").",
+            "editor": "stringList",
+            "prefill": ["Asana", "monday.com", "Trello"]
+        },
+        "platforms": {
+            "title": "Platforms",
+            "type": "array",
+            "description": "Which review platforms to scrape.",
+            "editor": "select",
+            "items": {"type": "string", "enum": ["g2", "capterra", "trustpilot"]},
+            "default": ["g2", "capterra", "trustpilot"]
+        },
+        "maxReviewsPerPlatform": {
+            "title": "Max reviews per platform",
+            "type": "integer",
+            "description": "Maximum number of reviews to collect per company per platform. Up to 500.",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 500
+        },
+        "sortBy": {
+            "title": "Sort by",
+            "type": "string",
+            "description": "How to sort reviews.",
+            "editor": "select",
+            "enum": ["recent", "helpful", "highest", "lowest"],
+            "default": "recent"
+        },
+        "minRating": {
+            "title": "Minimum star rating",
+            "type": "integer",
+            "description": "Only collect reviews at or above this rating (1–5). Leave blank for all ratings.",
+            "minimum": 1,
+            "maximum": 5
+        },
+        "trustpilotApiKey": {
+            "title": "Trustpilot API key (optional)",
+            "type": "string",
+            "description": "Free API key from developers.trustpilot.com. Provides more structured data. If omitted, Trustpilot is scraped directly.",
+            "editor": "textfield",
+            "isSecret": true
+        },
+        "proxyConfiguration": {
+            "title": "Proxy configuration",
+            "type": "object",
+            "description": "Proxy settings. Residential proxies improve G2 and Capterra success rates.",
+            "editor": "proxy"
+        }
     },
-    "platforms": {
-      "title": "Platforms",
-      "description": "Which review platforms to scrape.",
-      "type": "array",
-      "items": {
-        "type": "string",
-        "enum": ["g2", "capterra", "trustpilot"]
-      },
-      "editor": "select",
-      "default": ["g2", "capterra", "trustpilot"]
-    },
-    "maxReviewsPerPlatform": {
-      "title": "Max reviews per platform",
-      "description": "Maximum number of reviews to collect per company per platform.",
-      "type": "integer",
-      "default": 50,
-      "minimum": 1,
-      "maximum": 500
-    },
-    "sortBy": {
-      "title": "Sort reviews by",
-      "description": "Order in which to collect reviews.",
-      "type": "string",
-      "enum": ["recent", "helpful", "highest", "lowest"],
-      "default": "recent",
-      "editor": "select"
-    },
-    "minRating": {
-      "title": "Minimum rating",
-      "description": "Only collect reviews at or above this star rating (1–5). Leave blank for all.",
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 5
-    },
-    "trustpilotApiKey": {
-      "title": "Trustpilot API key",
-      "description": "Free API key from developers.trustpilot.com — enables reliable Trustpilot scraping without proxies. Leave blank to skip Trustpilot.",
-      "type": "string",
-      "editor": "textfield",
-      "isSecret": true
-    },
-    "proxyConfiguration": {
-      "title": "Proxy configuration",
-      "description": "Proxy settings for G2 and Capterra. Residential proxies strongly recommended — datacenter IPs are blocked by these sites.",
-      "type": "object",
-      "editor": "proxy"
-    }
-  },
-  "required": ["companies"]
+    "required": ["companies"]
 }

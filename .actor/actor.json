@@ -1,12 +1,39 @@
 {
-  "actorSpecification": 1,
-  "name": "b2b-reviews-scraper",
-  "title": "B2B Reviews Scraper — G2, Capterra & Trustpilot",
-  "description": "Scrape company reviews from G2, Capterra, and Trustpilot in one run. Get reviewer details, ratings, pros/cons, and dates. Perfect for reputation monitoring and competitor research.",
-  "version": "0.0",
-  "meta": {
-    "templateId": "python3"
-  },
-  "input": "./input_schema.json",
-  "dockerfile": "./Dockerfile"
+    "actorSpecification": 1,
+    "name": "b2b-reviews-scraper",
+    "title": "B2B Reviews Scraper \u2014 G2, Capterra & Trustpilot",
+    "description": "Scrape reviews from G2, Capterra, and Trustpilot in one run. Multi-company batches, unified output schema, pay per review scraped.",
+    "version": "0.1",
+    "buildTag": "latest",
+    "input": "./input_schema.json",
+    "dockerfile": "./Dockerfile",
+    "storages": {
+        "dataset": {
+            "actorSpecification": 1,
+            "views": {
+                "overview": {
+                    "title": "Reviews",
+                    "transformation": {
+                        "fields": [
+                            "company",
+                            "platform",
+                            "rating",
+                            "title",
+                            "body",
+                            "pros",
+                            "cons",
+                            "reviewer_name",
+                            "reviewer_title",
+                            "date",
+                            "verified",
+                            "review_url"
+                        ]
+                    },
+                    "display": {
+                        "component": "table"
+                    }
+                }
+            }
+        }
+    }
 }

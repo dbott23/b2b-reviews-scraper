@@ -42,6 +42,7 @@ async def main() -> None:
             return
 
         proxy_url: str | None = None
+        proxy_config = None
         try:
             if proxy_input and isinstance(proxy_input, dict):
                 groups = proxy_input.get("groups") or []
@@ -60,16 +61,7 @@ async def main() -> None:
         except Exception as exc:
             Actor.log.warning(f"Proxy setup failed ({exc}) — running without proxy")
 
-        if proxy_url:
-            is_residential = "RESIDENTIAL" in str(proxy_url).upper() or (proxy_input and "RESIDENTIAL" in str(proxy_input).upper())
-            if not is_residential and not trustpilot_api_key:
-                Actor.log.warning(
-                    "Using datacenter proxies — G2, Capterra, and Trustpilot block datacenter IPs. "
-                    "For reliable results: enable residential proxies in Proxy configuration, "
-                    "or provide a Trustpilot API key for Trustpilot scraping."
-                )
-
-        Actor.log.info(f"Proxy: {'enabled (' + str(proxy_url)[:40] + '...)' if proxy_url else 'disabled'}")
+        Actor.log.info(f"Proxy: {'enabled' if proxy_url else 'disabled'}")
 
         # Checkpoint: track which (company, platform) pairs are done
         checkpoint = await Actor.get_value(CHECKPOINT_KEY) or {}
@@ -90,7 +82,12 @@ async def main() -> None:
                 scrape_fn = SCRAPER_MAP[platform]
 
                 try:
-                    extra = {"api_key": trustpilot_api_key} if platform == "trustpilot" else {}
+                    extra: dict = {}
+                    if platform == "trustpilot" and trustpilot_api_key:
+                        extra["api_key"] = trustpilot_api_key
+                    # G2 gets a fresh-URL callable so it can rotate per page on blocks
+                    if platform == "g2" and proxy_config:
+                        extra["get_proxy_url"] = proxy_config.new_url
                     records = await scrape_fn(
                         company=company,
                         max_reviews=max_per_platform,

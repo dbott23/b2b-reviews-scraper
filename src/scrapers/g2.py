@@ -114,51 +114,107 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     return records
 
 
+async def _is_blocked(page) -> bool:
+    """Return True if DataDome has served a challenge or block page."""
+    title = await page.title()
+    url = page.url
+    return (
+        "datadome" in url.lower()
+        or "just a moment" in title.lower()
+        or "access denied" in title.lower()
+        or await page.query_selector("#datadome") is not None
+    )
+
+
 async def scrape(
     company: str,
     max_reviews: int = 50,
     sort_by: str = "recent",
     min_rating: int | None = None,
     proxy_url: str | None = None,
+    get_proxy_url=None,  # async callable () -> str, for per-page rotation
     **_kwargs,
 ) -> list[dict]:
     records: list[dict] = []
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+    async def _fresh_proxy() -> str | None:
+        if get_proxy_url:
+            try:
+                return await get_proxy_url()
+            except Exception:
+                pass
+        return proxy_url
+
+    async def _new_context(pw, browser_ref: list):
+        if browser_ref:
+            try:
+                await browser_ref[0].close()
+            except Exception:
+                pass
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        browser_ref.clear()
+        browser_ref.append(browser)
+        url = await _fresh_proxy()
         context_opts: dict = {
             "user_agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ),
-            "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
+            "extra_http_headers": {
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"',
+            },
+            "viewport": {"width": 1440, "height": 900},
         }
-        if proxy_url:
-            context_opts["proxy"] = {"server": proxy_url}
+        if url:
+            context_opts["proxy"] = {"server": url}
         context = await browser.new_context(**context_opts)
         page = await context.new_page()
         await apply_stealth(page)
+        return page
 
-        # Load search page; G2 uses DataDome bot detection which may require
-        # JS challenge resolution — wait for title change as signal
-        try:
-            await page.goto(
-                f"https://www.g2.com/search?query={company}",
-                wait_until="commit",
-                timeout=15000,
-            )
-        except Exception:
-            pass
+    async with async_playwright() as pw:
+        browser_ref: list = []
+        page = await _new_context(pw, browser_ref)
 
-        try:
-            await page.wait_for_function(
-                "document.title !== 'g2.com' && document.title !== '' && document.title !== 'Just a moment...'",
-                timeout=25000,
-            )
-        except Exception:
-            pass
+        # Search for the product — rotate proxy if blocked
+        for attempt in range(2):
+            try:
+                await page.goto(
+                    f"https://www.g2.com/search?query={company}",
+                    wait_until="commit",
+                    timeout=20000,
+                )
+            except Exception:
+                pass
 
-        await asyncio.sleep(2)
+            try:
+                await page.wait_for_function(
+                    "document.title !== 'g2.com' && document.title !== '' && document.title !== 'Just a moment...'",
+                    timeout=20000,
+                )
+            except Exception:
+                pass
+
+            await asyncio.sleep(2)
+
+            if not await _is_blocked(page):
+                break
+
+            if attempt == 0:
+                # Rotate proxy and retry with a fresh browser context
+                page = await _new_context(pw, browser_ref)
+
+        if await _is_blocked(page):
+            if browser_ref:
+                await browser_ref[0].close()
+            return []
 
         link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
         if not link:
@@ -170,7 +226,8 @@ async def scrape(
             slug = m.group(1) if m else None
 
         if not slug:
-            await browser.close()
+            if browser_ref:
+                await browser_ref[0].close()
             return []
 
         product_url = f"https://www.g2.com/products/{slug}/reviews"
@@ -183,12 +240,24 @@ async def scrape(
                 url += f"&filters[star_rating]={min_rating}"
 
             try:
-                await page.goto(url, wait_until="commit", timeout=20000)
+                await page.goto(url, wait_until="commit", timeout=25000)
             except Exception:
                 pass
-            await asyncio.sleep(5)
+
+            await asyncio.sleep(4)
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(2)
+
+            if await _is_blocked(page):
+                # Rotate proxy mid-pagination and retry this page once
+                page = await _new_context(pw, browser_ref)
+                try:
+                    await page.goto(url, wait_until="commit", timeout=25000)
+                except Exception:
+                    pass
+                await asyncio.sleep(5)
+                if await _is_blocked(page):
+                    break
 
             html = await page.content()
             page_records = _parse_reviews(html, company, product_url)
@@ -200,6 +269,7 @@ async def scrape(
             page_num += 1
             await asyncio.sleep(2)
 
-        await browser.close()
+        if browser_ref:
+            await browser_ref[0].close()
 
     return records[:max_reviews]

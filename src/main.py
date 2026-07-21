@@ -39,17 +39,17 @@ async def main() -> None:
             await Actor.fail(status_message=f"Unknown platform(s): {unknown}. Use g2, capterra, trustpilot.")
             return
 
-        # Set up proxy — Apify residential proxies help bypass anti-bot on review sites
+        # Set up proxy — helps bypass anti-bot on review sites
+        # Residential proxies (groups=["RESIDENTIAL"]) work best but require a paid plan
+        # Falls back to datacenter proxies automatically if residential unavailable
+        proxy_url: str | None = None
         try:
-            proxy_config = await Actor.create_proxy_configuration(
-                groups=["RESIDENTIAL"],
-            )
+            proxy_config = await Actor.create_proxy_configuration()
             proxy_url = await proxy_config.new_url() if proxy_config else None
-        except Exception:
-            Actor.log.warning("No proxy available — running without proxy (may be blocked by review sites)")
-            proxy_url = None
+        except Exception as exc:
+            Actor.log.warning(f"Proxy setup failed ({exc}) — running without proxy")
 
-        Actor.log.info(f"Proxy: {'enabled' if proxy_url else 'disabled'}")
+        Actor.log.info(f"Proxy: {'enabled (' + str(proxy_url)[:40] + '...)' if proxy_url else 'disabled'}")
 
         # Checkpoint: track which (company, platform) pairs are done
         checkpoint = await Actor.get_value(CHECKPOINT_KEY) or {}

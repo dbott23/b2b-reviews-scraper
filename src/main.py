@@ -92,3 +92,6 @@ async def main() -> None:
                 Actor.log.info(f"  → {len(records)} reviews from {platform} for {company} (total: {total_pushed})")
 
         Actor.log.info(f"Done. Total reviews pushed: {total_pushed}")
+
+if __name__ == "__main__":
+    asyncio.run(main())

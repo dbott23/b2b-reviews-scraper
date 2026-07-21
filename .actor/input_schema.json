@@ -1,5 +1,4 @@
 {
-  "actorInputSchemaVersion": 1,
   "title": "B2B Reviews Scraper Input",
   "description": "Scrape reviews from G2, Capterra, and Trustpilot.",
   "type": "object",

@@ -18,18 +18,15 @@ SORT_MAP = {
 }
 
 FF_PREFS = {"security.sandbox.content.level": 0}
-_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human", "please wait...")
+_CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human")
 
 
 def _is_challenge(html: str, url: str) -> bool:
-    # Use the page <title> for precision — avoids false positives on real page content
-    import re as _re
-    m = _re.search(r"<title[^>]*>([^<]*)</title>", html[:600], _re.IGNORECASE)
+    m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
     title = m.group(1).lower().strip() if m else ""
     return (
         any(s in title for s in _CHALLENGE_TITLES)
         or "__cf_chl_rt_tk" in url
-        or "waf-referrer-shim" in html[:200]
     )
 
 
@@ -42,7 +39,7 @@ async def _resolve_proxy(get_proxy_url) -> str | None:
         return None
 
 
-async def _get_html(page, url: str, label: str, max_polls: int = 30) -> str:
+async def _get_html(page, url: str, label: str, max_polls: int = 40) -> str:
     """Navigate and wait until we get real content (not a bot challenge page)."""
     html = ""
     try:
@@ -57,37 +54,23 @@ async def _get_html(page, url: str, label: str, max_polls: int = 30) -> str:
         except Exception:
             html = ""
             cur_url = url
-        print(f"[{label}] poll {poll}: url={cur_url}, html_len={len(html)}", flush=True)
-        if html and len(html) > 500 and not _is_challenge(html, cur_url):
+        challenge = _is_challenge(html, cur_url)
+        m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
+        title = (m.group(1) if m else "?")[:60]
+        print(f"[{label}] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
+        if html and len(html) > 500 and not challenge:
             break
         await asyncio.sleep(4)
     return html
 
 
-async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
-    proxy = await _resolve_proxy(get_proxy_url)
-    if proxy:
-        masked = proxy.split("@")[-1] if "@" in proxy else proxy
-        print(f"[capterra] search using proxy: ...@{masked}", flush=True)
-
-    async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS) as browser:
-        page = await browser.new_page()
-        url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
-        html = await _get_html(page, url, "capterra")
-
-    print(f"[capterra] search html preview: {html[:400]}", flush=True)
-
-    if not html or _is_challenge(html, ""):
-        return None
-
+def _extract_product_url(html: str) -> str | None:
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if any(pat in href for pat in ["/p/", "/reviews/", "/software/"]):
             print(f"[capterra] found product link: {href}", flush=True)
             return "https://www.capterra.com" + href if href.startswith("/") else href
-
-    print("[capterra] no product link found", flush=True)
     return None
 
 
@@ -174,21 +157,33 @@ async def scrape(
     records: list[dict] = []
 
     _get_proxy = get_proxy_url or ((lambda: proxy_url) if proxy_url else None)
-    product_url = await _search_product_url(company, _get_proxy)
-    if not product_url:
-        return []
-
     proxy = await _resolve_proxy(_get_proxy)
+    if proxy:
+        masked = proxy.split("@")[-1] if "@" in proxy else proxy
+        print(f"[capterra] using proxy: ...@{masked}", flush=True)
 
-    if "/reviews" in product_url:
-        reviews_url = product_url.rstrip("/") + "/"
-    else:
-        reviews_url = product_url.rstrip("/") + "/reviews/"
-    ct_sort = SORT_MAP.get(sort_by, "most_recent")
-    page_num = 1
-
+    # Use ONE browser for search + reviews so CF/WAF cookies carry over
     async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS) as browser:
         page = await browser.new_page()
+
+        # Search phase
+        search_url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
+        html = await _get_html(page, search_url, "capterra-search")
+        if not html:
+            return []
+
+        product_url = _extract_product_url(html)
+        if not product_url:
+            print("[capterra] no product link found", flush=True)
+            return []
+
+        # Reviews phase — same browser, CF cookies already set
+        if "/reviews" in product_url:
+            reviews_url = product_url.rstrip("/") + "/"
+        else:
+            reviews_url = product_url.rstrip("/") + "/reviews/"
+        ct_sort = SORT_MAP.get(sort_by, "most_recent")
+        page_num = 1
 
         while len(records) < max_reviews:
             url = f"{reviews_url}?sort={ct_sort}&page={page_num}"
@@ -197,10 +192,12 @@ async def scrape(
 
             html = await _get_html(page, url, "capterra-reviews")
             if not html or _is_challenge(html, page.url):
+                print(f"[capterra] reviews page {page_num}: no content or still challenge — stopping", flush=True)
                 break
 
             print(f"[capterra] reviews page {page_num} html preview: {html[:300]}", flush=True)
             page_records = _parse_reviews(html, company, product_url)
+            print(f"[capterra] reviews page {page_num}: {len(page_records)} records parsed", flush=True)
             if not page_records:
                 break
 

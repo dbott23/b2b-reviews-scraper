@@ -12,6 +12,8 @@ import httpx
 from bs4 import BeautifulSoup
 from camoufox.async_api import AsyncCamoufox
 
+from src.scrapers._proxy import parse_proxy
+
 SORT_MAP_API = {
     "recent": "createdat.desc",
     "helpful": "createdat.desc",
@@ -197,7 +199,7 @@ async def _scrape_web(
         print("[trustpilot] no proxy — direct connection", flush=True)
 
     page_num = 1
-    proxy_opts = {"server": proxy} if proxy else None
+    proxy_opts = parse_proxy(proxy)
     async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
         page = await browser.new_page()
 

@@ -8,6 +8,8 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 from camoufox.async_api import AsyncCamoufox
 
+from src.scrapers._proxy import parse_proxy
+
 SORT_MAP = {
     "recent": "most_recent",
     "helpful": "most_helpful",
@@ -50,7 +52,7 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
         masked = proxy.split("@")[-1] if "@" in proxy else proxy
         print(f"[capterra] search using proxy: ...@{masked}", flush=True)
 
-    proxy_opts = {"server": proxy} if proxy else None
+    proxy_opts = parse_proxy(proxy)
     async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
         page = await browser.new_page()
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
@@ -160,7 +162,7 @@ async def scrape(
         return []
 
     proxy = await _resolve_proxy(_get_proxy)
-    proxy_opts = {"server": proxy} if proxy else None
+    proxy_opts = parse_proxy(proxy)
 
     if "/reviews" in product_url:
         reviews_url = product_url.rstrip("/") + "/"

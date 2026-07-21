@@ -11,6 +11,8 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from camoufox.async_api import AsyncCamoufox
 
+from src.scrapers._proxy import parse_proxy
+
 SORT_MAP = {
     "recent": "most_recent",
     "helpful": "most_helpful",
@@ -148,7 +150,7 @@ async def scrape(
         masked = proxy.split("@")[-1] if "@" in proxy else proxy
         print(f"[g2] using proxy: ...@{masked}", flush=True)
 
-    proxy_opts = {"server": proxy} if proxy else None
+    proxy_opts = parse_proxy(proxy)
     slug = re.sub(r"[^a-z0-9]+", "-", company.lower()).strip("-")
     product_url = f"https://www.g2.com/products/{slug}/reviews"
     g2_sort = SORT_MAP.get(sort_by, "most_recent")

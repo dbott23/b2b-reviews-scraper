@@ -100,7 +100,7 @@ async def scrape(
     records: list[dict] = []
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
         context = await browser.new_context(
             user_agent=USER_AGENT,
             extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},

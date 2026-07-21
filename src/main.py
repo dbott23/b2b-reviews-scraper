@@ -55,13 +55,19 @@ async def main() -> None:
                 # Prefer residential proxies — datacenter IPs are blocked by G2/Capterra/Trustpilot
                 try:
                     proxy_config = await Actor.create_proxy_configuration(groups=["RESIDENTIAL"])
-                except Exception:
+                    Actor.log.info("Using RESIDENTIAL proxy group")
+                except Exception as res_exc:
+                    Actor.log.warning(f"Residential proxy unavailable ({res_exc}), falling back to datacenter")
                     proxy_config = await Actor.create_proxy_configuration()
             proxy_url = await proxy_config.new_url() if proxy_config else None
         except Exception as exc:
             Actor.log.warning(f"Proxy setup failed ({exc}) — running without proxy")
 
-        Actor.log.info(f"Proxy: {'enabled' if proxy_url else 'disabled'}")
+        if proxy_url:
+            masked = proxy_url.split("@")[-1] if "@" in proxy_url else proxy_url
+            Actor.log.info(f"Proxy enabled: {masked}")
+        else:
+            Actor.log.info("Proxy: disabled")
 
         # Checkpoint: track which (company, platform) pairs are done
         checkpoint = await Actor.get_value(CHECKPOINT_KEY) or {}

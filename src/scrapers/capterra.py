@@ -30,7 +30,13 @@ async def _get_proxy(get_proxy_url) -> str | None:
 
 async def _fetch(url: str, proxy: str | None) -> tuple[int, str]:
     """Fetch URL with Chrome TLS impersonation via curl_cffi."""
-    kwargs: dict = {"impersonate": "chrome124", "follow_redirects": True, "timeout": 30}
+    if proxy:
+        # Mask password for logging
+        masked = proxy.split("@")[-1] if "@" in proxy else proxy
+        print(f"[capterra] using proxy: ...@{masked}", flush=True)
+    else:
+        print("[capterra] no proxy — direct connection", flush=True)
+    kwargs: dict = {"impersonate": "chrome136", "follow_redirects": True, "timeout": 30}
     if proxy:
         kwargs["proxies"] = {"https": proxy, "http": proxy}
     async with AsyncSession() as s:

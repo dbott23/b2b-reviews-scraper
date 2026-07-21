@@ -10,9 +10,7 @@ from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
-
-from src.scrapers._stealth import apply_stealth
+from curl_cffi.requests import AsyncSession
 
 SORT_MAP_API = {
     "recent": "createdat.desc",
@@ -198,41 +196,20 @@ async def _scrape_web(
     else:
         print("[trustpilot] no proxy — direct connection", flush=True)
 
-    async with async_playwright() as pw:
-        launch_args = [
-            "--no-sandbox", "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-        ]
-        browser = await pw.chromium.launch(headless=True, args=launch_args)
-        # No custom user_agent — use Playwright's default to avoid version mismatch
-        ctx_opts: dict = {}
-        if proxy:
-            ctx_opts["proxy"] = {"server": proxy}
-        context = await browser.new_context(**ctx_opts)
-        page = await context.new_page()
-        await apply_stealth(page)
+    proxies = {"https": proxy, "http": proxy} if proxy else None
+    page_num = 1
 
-        page_num = 1
+    async with AsyncSession(impersonate="chrome", proxies=proxies) as session:
         while len(records) < max_reviews:
             url = f"{product_url}?sort={sort_param}&page={page_num}"
-            html = ""
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                resp = await session.get(url, timeout=30)
+                html = resp.text if resp.status_code == 200 else ""
+                print(f"[trustpilot] page {page_num} status={resp.status_code} html_len={len(html)}", flush=True)
             except Exception as e:
-                print(f"[trustpilot] goto failed page {page_num}: {e}", flush=True)
+                print(f"[trustpilot] fetch failed page {page_num}: {e}", flush=True)
+                html = ""
 
-            # Poll for content — Cloudflare challenge may take time to resolve
-            for poll in range(10):
-                try:
-                    html = await page.content()
-                except Exception:
-                    html = ""
-                print(f"[trustpilot] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
-                if html and len(html) > 500:
-                    break
-                await asyncio.sleep(4)
-
-            print(f"[trustpilot] loaded page {page_num}, url: {page.url}, html length: {len(html)}", flush=True)
             print(f"[trustpilot] html preview: {html[:300]}", flush=True)
 
             m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
@@ -257,8 +234,6 @@ async def _scrape_web(
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1.5)
-
-        await browser.close()
 
     return records[:max_reviews]
 

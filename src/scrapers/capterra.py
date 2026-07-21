@@ -1,4 +1,4 @@
-"""Capterra scraper — uses Playwright (real browser) for Cloudflare-protected pages."""
+"""Capterra scraper — uses curl_cffi to bypass Cloudflare TLS fingerprinting."""
 
 import asyncio
 import re
@@ -6,9 +6,7 @@ from datetime import datetime
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
-
-from src.scrapers._stealth import apply_stealth
+from curl_cffi.requests import AsyncSession
 
 SORT_MAP = {
     "recent": "most_recent",
@@ -18,58 +16,37 @@ SORT_MAP = {
 }
 
 
-async def _resolve_proxy(get_proxy_url) -> str | None:
-    if not get_proxy_url:
-        return None
+async def _fetch(session: AsyncSession, url: str) -> str:
     try:
-        return await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
-    except Exception:
-        return None
+        resp = await session.get(url, timeout=30)
+        print(f"[capterra] GET {url} -> {resp.status_code}, html_len={len(resp.text)}", flush=True)
+        print(f"[capterra] html preview: {resp.text[:400]}", flush=True)
+        if resp.status_code == 200:
+            return resp.text
+    except Exception as e:
+        print(f"[capterra] fetch error {url}: {e}", flush=True)
+    return ""
 
 
 async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
-    proxy = await _resolve_proxy(get_proxy_url)
+    proxy = None
+    if get_proxy_url:
+        try:
+            proxy = await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
+        except Exception:
+            pass
+
     if proxy:
         masked = proxy.split("@")[-1] if "@" in proxy else proxy
-        print(f"[capterra] search using proxy: ...@{masked}", flush=True)
+        print(f"[capterra] using proxy: ...@{masked}", flush=True)
 
-    async with async_playwright() as pw:
-        launch_args = [
-            "--no-sandbox", "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-        ]
-        browser = await pw.chromium.launch(headless=True, args=launch_args)
-        # No custom user_agent — use Playwright's default to avoid version mismatch
-        ctx_opts: dict = {}
-        if proxy:
-            ctx_opts["proxy"] = {"server": proxy}
-        context = await browser.new_context(**ctx_opts)
-        page = await context.new_page()
-        await apply_stealth(page)
-
+    proxies = {"https": proxy, "http": proxy} if proxy else None
+    async with AsyncSession(impersonate="chrome", proxies=proxies) as session:
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
-        html = ""
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        except Exception as e:
-            print(f"[capterra] goto failed: {e}", flush=True)
+        html = await _fetch(session, url)
 
-        # Poll for content — Cloudflare challenge may take time to resolve
-        for poll in range(15):
-            try:
-                html = await page.content()
-            except Exception:
-                html = ""
-            print(f"[capterra] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
-            if html and len(html) > 500:
-                break
-            await asyncio.sleep(4)
-
-        final_url = page.url
-        await browser.close()
-
-    print(f"[capterra] final URL: {final_url}, html length: {len(html)}", flush=True)
-    print(f"[capterra] html preview: {html[:500]}", flush=True)
+    if not html:
+        return None
 
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):
@@ -87,7 +64,6 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     records = []
 
     for card in soup.select("[data-testid='review-card'], .review-card, article[class*='review']"):
-        # Rating
         rating = None
         rating_el = card.select_one("[aria-label*='star'], [class*='rating']")
         if rating_el:
@@ -98,11 +74,9 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
                 except ValueError:
                     pass
 
-        # Title
         title_el = card.select_one("h3, [class*='title'], [class*='headline']")
         title = title_el.get_text(strip=True) if title_el else None
 
-        # Body / pros / cons
         body_el = card.select_one("[class*='body'], [class*='comment'], p")
         body = body_el.get_text(strip=True) if body_el else None
         pros = cons = None
@@ -114,11 +88,9 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
             elif "cons" in label:
                 cons = text
 
-        # Reviewer
         reviewer_el = card.select_one("[class*='reviewer'], [class*='author']")
         reviewer_name = reviewer_el.get_text(strip=True) if reviewer_el else None
 
-        # Date
         date_el = card.select_one("time, [class*='date']")
         date_str = ""
         if date_el:
@@ -128,7 +100,6 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
         except Exception:
             date = date_str or None
 
-        # Review URL
         review_link = card.select_one("a[href*='/reviews/']")
         review_url = None
         if review_link:
@@ -170,69 +141,43 @@ async def scrape(
 ) -> list[dict]:
     records: list[dict] = []
 
-    _get_proxy = get_proxy_url or (lambda: proxy_url) if proxy_url else None
+    _get_proxy = get_proxy_url or ((lambda: proxy_url) if proxy_url else None)
     product_url = await _search_product_url(company, _get_proxy)
     if not product_url:
         return []
 
-    proxy = await _resolve_proxy(_get_proxy)
-    async with async_playwright() as pw:
-        launch_args = [
-            "--no-sandbox", "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-        ]
-        browser = await pw.chromium.launch(headless=True, args=launch_args)
-        # No custom user_agent — use Playwright's default to avoid version mismatch
-        ctx_opts: dict = {}
-        if proxy:
-            ctx_opts["proxy"] = {"server": proxy}
-        context = await browser.new_context(**ctx_opts)
-        page = await context.new_page()
-        await apply_stealth(page)
+    proxy = None
+    if _get_proxy:
+        try:
+            proxy = await _get_proxy() if asyncio.iscoroutinefunction(_get_proxy) else _get_proxy()
+        except Exception:
+            pass
 
-        # Build reviews URL — product_url may already contain /reviews/
-        if "/reviews" in product_url:
-            reviews_url = product_url.rstrip("/") + "/"
-        else:
-            reviews_url = product_url.rstrip("/") + "/reviews/"
-        ct_sort = SORT_MAP.get(sort_by, "most_recent")
-        page_num = 1
+    proxies = {"https": proxy, "http": proxy} if proxy else None
 
+    if "/reviews" in product_url:
+        reviews_url = product_url.rstrip("/") + "/"
+    else:
+        reviews_url = product_url.rstrip("/") + "/reviews/"
+    ct_sort = SORT_MAP.get(sort_by, "most_recent")
+    page_num = 1
+
+    async with AsyncSession(impersonate="chrome", proxies=proxies) as session:
         while len(records) < max_reviews:
             url = f"{reviews_url}?sort={ct_sort}&page={page_num}"
             if min_rating:
                 url += f"&rating={min_rating}"
 
-            html = ""
-            try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            except Exception as e:
-                print(f"[capterra] reviews goto failed page {page_num}: {e}", flush=True)
-
-            # Poll for content — Cloudflare challenge may take time to resolve
-            for poll in range(10):
-                try:
-                    html = await page.content()
-                except Exception:
-                    html = ""
-                print(f"[capterra] reviews poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
-                if html and len(html) > 500:
-                    break
-                await asyncio.sleep(4)
-
+            html = await _fetch(session, url)
             if not html:
                 break
 
-            print(f"[capterra] reviews html preview: {html[:300]}", flush=True)
             page_records = _parse_reviews(html, company, product_url)
-
             if not page_records:
                 break
 
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1.5)
-
-        await browser.close()
 
     return records[:max_reviews]

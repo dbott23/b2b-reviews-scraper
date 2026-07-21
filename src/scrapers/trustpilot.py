@@ -14,6 +14,16 @@ from camoufox.async_api import AsyncCamoufox
 
 from src.scrapers._proxy import parse_proxy
 
+_CHALLENGE_SIGNALS = ("just a moment", "verifying connection", "verifying you are human", "please wait")
+
+
+def _is_challenge(html: str, url: str) -> bool:
+    lower = html[:1000].lower()
+    return (
+        any(s in lower for s in _CHALLENGE_SIGNALS)
+        or "__cf_chl_rt_tk" in url
+    )
+
 SORT_MAP_API = {
     "recent": "createdat.desc",
     "helpful": "createdat.desc",
@@ -211,13 +221,15 @@ async def _scrape_web(
             except Exception as e:
                 print(f"[trustpilot] goto failed page {page_num}: {e}", flush=True)
 
-            for poll in range(15):
+            for poll in range(30):
                 try:
                     html = await page.content()
+                    cur_url = page.url
                 except Exception:
                     html = ""
-                print(f"[trustpilot] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
-                if html and len(html) > 500:
+                    cur_url = ""
+                print(f"[trustpilot] poll {poll}: url={cur_url}, html_len={len(html)}", flush=True)
+                if html and len(html) > 500 and not _is_challenge(html, cur_url):
                     break
                 await asyncio.sleep(4)
 

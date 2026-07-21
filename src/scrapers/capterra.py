@@ -17,6 +17,18 @@ SORT_MAP = {
     "lowest": "lowest_rating",
 }
 
+_CHALLENGE_SIGNALS = ("just a moment", "verifying connection", "verifying you are human", "please wait")
+FF_PREFS = {"security.sandbox.content.level": 0}
+
+
+def _is_challenge(html: str, url: str) -> bool:
+    lower = html[:1000].lower()
+    return (
+        any(s in lower for s in _CHALLENGE_SIGNALS)
+        or "__cf_chl_rt_tk" in url
+        or "challenge" in url.lower()
+    )
+
 
 async def _resolve_proxy(get_proxy_url) -> str | None:
     if not get_proxy_url:
@@ -27,20 +39,23 @@ async def _resolve_proxy(get_proxy_url) -> str | None:
         return None
 
 
-async def _get_html(page, url: str, label: str) -> str:
+async def _get_html(page, url: str, label: str, max_polls: int = 30) -> str:
+    """Navigate and wait until we get real content (not a bot challenge page)."""
     html = ""
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         print(f"[{label}] goto failed: {e}", flush=True)
 
-    for poll in range(15):
+    for poll in range(max_polls):
         try:
             html = await page.content()
+            cur_url = page.url
         except Exception:
             html = ""
-        print(f"[{label}] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
-        if html and len(html) > 500:
+            cur_url = url
+        print(f"[{label}] poll {poll}: url={cur_url}, html_len={len(html)}", flush=True)
+        if html and len(html) > 500 and not _is_challenge(html, cur_url):
             break
         await asyncio.sleep(4)
     return html
@@ -52,15 +67,14 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
         masked = proxy.split("@")[-1] if "@" in proxy else proxy
         print(f"[capterra] search using proxy: ...@{masked}", flush=True)
 
-    proxy_opts = parse_proxy(proxy)
-    async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
+    async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS) as browser:
         page = await browser.new_page()
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
         html = await _get_html(page, url, "capterra")
 
     print(f"[capterra] search html preview: {html[:400]}", flush=True)
 
-    if not html:
+    if not html or _is_challenge(html, ""):
         return None
 
     soup = BeautifulSoup(html, "html.parser")
@@ -162,7 +176,6 @@ async def scrape(
         return []
 
     proxy = await _resolve_proxy(_get_proxy)
-    proxy_opts = parse_proxy(proxy)
 
     if "/reviews" in product_url:
         reviews_url = product_url.rstrip("/") + "/"
@@ -171,7 +184,7 @@ async def scrape(
     ct_sort = SORT_MAP.get(sort_by, "most_recent")
     page_num = 1
 
-    async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
+    async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS) as browser:
         page = await browser.new_page()
 
         while len(records) < max_reviews:
@@ -180,7 +193,7 @@ async def scrape(
                 url += f"&rating={min_rating}"
 
             html = await _get_html(page, url, "capterra-reviews")
-            if not html:
+            if not html or _is_challenge(html, page.url):
                 break
 
             print(f"[capterra] reviews page {page_num} html preview: {html[:300]}", flush=True)

@@ -264,6 +264,10 @@ async def scrape(
             except Exception:
                 pass
 
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=60000)
+            except Exception:
+                pass
             await asyncio.sleep(4)
             try:
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")

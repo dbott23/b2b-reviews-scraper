@@ -27,7 +27,11 @@ async def _search_product_url(page, company: str) -> str | None:
     except Exception:
         return None
 
-    # Wait for the page to finish loading, then extract all links via JS
+    # Wait for DOM content on slow proxy connections (commit fires on first byte only)
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=60000)
+    except Exception:
+        pass
     await asyncio.sleep(5)
 
     hrefs: list[str] = await page.evaluate("""
@@ -170,6 +174,10 @@ async def scrape(
                 await page.goto(url, wait_until="commit", timeout=30000)
             except Exception:
                 break
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=60000)
+            except Exception:
+                pass
             # Wait for review cards to render
             try:
                 await page.wait_for_selector(

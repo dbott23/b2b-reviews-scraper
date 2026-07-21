@@ -215,6 +215,10 @@ async def _scrape_web(
                 print(f"[trustpilot] goto failed: {e}", flush=True)
                 break
 
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=60000)
+            except Exception:
+                pass
             await asyncio.sleep(3)
 
             page_title = await page.title()

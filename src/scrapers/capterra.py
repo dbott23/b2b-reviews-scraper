@@ -20,8 +20,8 @@ SORT_MAP = {
 async def _search_product_url(page, company: str) -> str | None:
     await page.goto(
         f"https://www.capterra.com/search/?query={company}",
-        wait_until="domcontentloaded",
-        timeout=60000,
+        wait_until="commit",
+        timeout=30000,
     )
     # First product card link
     link = await page.query_selector("a[href*='/p/']")
@@ -149,7 +149,8 @@ async def scrape(
             if min_rating:
                 url += f"&rating={min_rating}"
 
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(url, wait_until="commit", timeout=30000)
+            await asyncio.sleep(5)
             html = await page.content()
             page_records = _parse_reviews(html, company, product_url)
 

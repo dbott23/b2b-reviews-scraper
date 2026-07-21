@@ -20,8 +20,8 @@ SORT_MAP = {
 async def _find_product_slug(page, company: str) -> str | None:
     await page.goto(
         f"https://www.g2.com/search?query={company}",
-        wait_until="domcontentloaded",
-        timeout=60000,
+        wait_until="commit",
+        timeout=30000,
     )
     # Product cards link to /products/<slug>/reviews
     link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
@@ -179,10 +179,12 @@ async def scrape(
             if min_rating:
                 url += f"&filters[star_rating]={min_rating}"
 
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            # G2 lazy-loads — scroll to trigger reviews
+            await page.goto(url, wait_until="commit", timeout=30000)
+            # Let JS render after initial commit
+            await asyncio.sleep(5)
+            # Scroll to trigger lazy-loaded reviews
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
             html = await page.content()
             page_records = _parse_reviews(html, company, product_url)

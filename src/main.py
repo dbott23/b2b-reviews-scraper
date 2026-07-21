@@ -43,12 +43,17 @@ async def main() -> None:
 
         proxy_url: str | None = None
         try:
-            if proxy_input:
-                proxy_config = await Actor.create_proxy_configuration(proxy_input)
+            if proxy_input and isinstance(proxy_input, dict):
+                groups = proxy_input.get("groups") or []
+                country = proxy_input.get("countryCode")
+                proxy_config = await Actor.create_proxy_configuration(
+                    groups=groups,
+                    **({"country_code": country} if country else {}),
+                )
             else:
                 # Prefer residential proxies — datacenter IPs are blocked by G2/Capterra/Trustpilot
                 try:
-                    proxy_config = await Actor.create_proxy_configuration({"groups": ["RESIDENTIAL"]})
+                    proxy_config = await Actor.create_proxy_configuration(groups=["RESIDENTIAL"])
                 except Exception:
                     proxy_config = await Actor.create_proxy_configuration()
             proxy_url = await proxy_config.new_url() if proxy_config else None

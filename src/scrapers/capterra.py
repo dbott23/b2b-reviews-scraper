@@ -1,24 +1,15 @@
-"""Capterra scraper — uses httpx for search, Playwright for JS-rendered review pages."""
+"""Capterra scraper — uses curl_cffi (Chrome TLS impersonation) for HTTP requests."""
 
 import asyncio
 import re
 from datetime import datetime
 from urllib.parse import quote_plus
 
-import httpx
 from bs4 import BeautifulSoup
+from curl_cffi.requests import AsyncSession
 from playwright.async_api import async_playwright
 
 from src.scrapers._stealth import apply_stealth
-
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
 
 SORT_MAP = {
     "recent": "most_recent",
@@ -28,22 +19,34 @@ SORT_MAP = {
 }
 
 
-async def _search_product_url(company: str, proxy_url: str | None) -> str | None:
-    """Use plain HTTP to search Capterra — avoids Playwright fingerprint detection."""
-    # Try without proxy first; residential proxies often get 403 on Capterra's CDN
-    client_kwargs: dict = {"headers": _HEADERS, "follow_redirects": True, "timeout": 30}
+async def _get_proxy(get_proxy_url) -> str | None:
+    if not get_proxy_url:
+        return None
+    try:
+        return await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
+    except Exception:
+        return None
 
-    async with httpx.AsyncClient(**client_kwargs) as client:
-        try:
-            resp = await client.get(
-                f"https://www.capterra.com/search/?query={quote_plus(company)}"
-            )
-            html = resp.text
-        except Exception as e:
-            print(f"[capterra] search request failed: {e}", flush=True)
-            return None
 
-    print(f"[capterra] search HTTP {resp.status_code}, html length: {len(html)}", flush=True)
+async def _fetch(url: str, proxy: str | None) -> tuple[int, str]:
+    """Fetch URL with Chrome TLS impersonation via curl_cffi."""
+    kwargs: dict = {"impersonate": "chrome124", "follow_redirects": True, "timeout": 30}
+    if proxy:
+        kwargs["proxies"] = {"https": proxy, "http": proxy}
+    async with AsyncSession() as s:
+        resp = await s.get(url, **kwargs)
+        return resp.status_code, resp.text
+
+
+async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
+    proxy = await _get_proxy(get_proxy_url)
+    status, html = await _fetch(
+        f"https://www.capterra.com/search/?query={quote_plus(company)}", proxy
+    )
+    print(f"[capterra] search HTTP {status}, html length: {len(html)}", flush=True)
+    if status != 200:
+        return None
+
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):
         href = a["href"]
@@ -138,11 +141,13 @@ async def scrape(
     sort_by: str = "recent",
     min_rating: int | None = None,
     proxy_url: str | None = None,
+    get_proxy_url=None,
     **_kwargs,
 ) -> list[dict]:
     records: list[dict] = []
 
-    product_url = await _search_product_url(company, proxy_url)
+    _get_proxy = get_proxy_url or (lambda: proxy_url) if proxy_url else None
+    product_url = await _search_product_url(company, _get_proxy)
     if not product_url:
         return []
 

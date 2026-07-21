@@ -217,17 +217,23 @@ async def _scrape_web(
         while len(records) < max_reviews:
             url = f"{product_url}?sort={sort_param}&page={page_num}"
             try:
-                await page.goto(url, wait_until="commit", timeout=60000)
-                await asyncio.sleep(5)
-                # Wait for Cloudflare challenge redirect to settle
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
-                except Exception:
-                    pass
+                await page.goto(url, wait_until="load", timeout=90000)
+                await asyncio.sleep(3)
                 html = await page.content()
+                # Retry if still empty (mid-navigation race)
+                for _ in range(3):
+                    if html:
+                        break
+                    await asyncio.sleep(3)
+                    html = await page.content()
             except Exception as e:
                 print(f"[trustpilot] navigation failed page {page_num}: {e}", flush=True)
-                break
+                try:
+                    html = await page.content()
+                except Exception:
+                    html = ""
+                if not html:
+                    break
 
             print(f"[trustpilot] loaded page {page_num}, url: {page.url}, html length: {len(html)}", flush=True)
             print(f"[trustpilot] html preview: {html[:300]}", flush=True)

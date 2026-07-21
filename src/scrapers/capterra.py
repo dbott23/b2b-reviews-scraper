@@ -50,24 +50,28 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
 
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
         try:
-            await page.goto(url, wait_until="commit", timeout=60000)
-            await asyncio.sleep(5)
-            # Wait for Cloudflare challenge redirect to settle
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=30000)
-            except Exception:
-                pass
+            await page.goto(url, wait_until="load", timeout=90000)
+            await asyncio.sleep(3)
             html = await page.content()
+            # Retry if still empty (mid-navigation race)
+            for _ in range(3):
+                if html:
+                    break
+                await asyncio.sleep(3)
+                html = await page.content()
         except Exception as e:
             print(f"[capterra] search navigation failed: {e}", flush=True)
-            await browser.close()
-            return None
+            # Try to get whatever content is there
+            try:
+                html = await page.content()
+            except Exception:
+                html = ""
 
         final_url = page.url
         await browser.close()
 
     print(f"[capterra] final URL: {final_url}, html length: {len(html)}", flush=True)
-    print(f"[capterra] html preview: {html[:300]}", flush=True)
+    print(f"[capterra] html preview: {html[:500]}", flush=True)
 
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):

@@ -8,4 +8,4 @@ RUN playwright install chromium --with-deps
 
 COPY . ./
 
-CMD ["src/main.py"]
+CMD ["python3", "src/main.py"]

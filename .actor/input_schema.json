@@ -1,0 +1,52 @@
+{
+  "actorInputSchemaVersion": 1,
+  "title": "B2B Reviews Scraper Input",
+  "description": "Scrape reviews from G2, Capterra, and Trustpilot.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "companies": {
+      "title": "Companies",
+      "description": "Company or product names to search for (e.g. 'Asana', 'monday.com').",
+      "type": "array",
+      "items": { "type": "string" },
+      "editor": "stringList",
+      "example": ["Asana", "Trello", "monday.com"]
+    },
+    "platforms": {
+      "title": "Platforms",
+      "description": "Which review platforms to scrape.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["g2", "capterra", "trustpilot"]
+      },
+      "editor": "select",
+      "default": ["g2", "capterra", "trustpilot"]
+    },
+    "maxReviewsPerPlatform": {
+      "title": "Max reviews per platform",
+      "description": "Maximum number of reviews to collect per company per platform.",
+      "type": "integer",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "sortBy": {
+      "title": "Sort reviews by",
+      "description": "Order in which to collect reviews.",
+      "type": "string",
+      "enum": ["recent", "helpful", "highest", "lowest"],
+      "default": "recent",
+      "editor": "select"
+    },
+    "minRating": {
+      "title": "Minimum rating",
+      "description": "Only collect reviews at or above this star rating (1–5). Leave blank for all.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    }
+  },
+  "required": ["companies"]
+}

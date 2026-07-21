@@ -167,31 +167,38 @@ async def scrape(
         page = await context.new_page()
         await apply_stealth(page)
 
-        # Use domcontentloaded with timeout; catch timeout and still grab content
+        # Initial load — DataDome/Cloudflare will serve a JS challenge first
         try:
             await page.goto(
                 f"https://www.g2.com/search?query={company}",
-                wait_until="domcontentloaded",
-                timeout=30000,
+                wait_until="commit",
+                timeout=15000,
             )
-        except Exception as e:
-            print(f"[g2] goto exception: {e!r}", flush=True)
+        except Exception:
+            pass
 
-        await asyncio.sleep(3)
+        # Wait up to 20s for challenge to resolve and redirect to real page
+        try:
+            await page.wait_for_function(
+                "document.title !== 'g2.com' && document.title !== ''",
+                timeout=20000,
+            )
+        except Exception:
+            pass
+
+        await asyncio.sleep(2)
         g2_html = await page.content()
         title = await page.title()
-        print(f"[g2] after goto: title={title!r} html_len={len(g2_html)} url={page.url}", flush=True)
-        print(f"[g2] snippet: {g2_html[:400]!r}", flush=True)
+        print(f"[g2] after challenge: title={title!r} html_len={len(g2_html)} url={page.url}", flush=True)
 
-        # Try to find product link in whatever content we have
         link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
         if not link:
             link = await page.query_selector("a[href*='/products/']")
         slug = None
         if link:
             href = await link.get_attribute("href")
-            import re
-            m = re.search(r"/products/([^/]+)", href or "")
+            import re as _re
+            m = _re.search(r"/products/([^/]+)", href or "")
             slug = m.group(1) if m else None
 
         print(f"[g2] slug={slug}", flush=True)

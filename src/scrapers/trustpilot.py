@@ -90,6 +90,61 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     return records
 
 
+def _parse_next_data(html: str, company: str, product_url: str) -> list[dict]:
+    """Fallback: extract reviews from Trustpilot's embedded __NEXT_DATA__ JSON."""
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return []
+
+    # Traverse to reviews list — path varies by page version
+    reviews_raw = []
+    try:
+        page_props = data["props"]["pageProps"]
+        reviews_raw = page_props.get("reviews") or page_props.get("reviewsList") or []
+    except (KeyError, TypeError):
+        pass
+
+    records = []
+    for r in reviews_raw:
+        if not isinstance(r, dict):
+            continue
+        rating_val = None
+        try:
+            rating_val = float(r.get("rating", {}).get("stars") or r.get("stars") or 0) or None
+        except (TypeError, ValueError):
+            pass
+
+        date_str = r.get("dates", {}).get("publishedDate") or r.get("date") or ""
+        try:
+            date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).date().isoformat()
+        except Exception:
+            date = date_str or None
+
+        consumer = r.get("consumer") or {}
+        records.append({
+            "company": company,
+            "platform": "trustpilot",
+            "reviewer_name": consumer.get("displayName"),
+            "reviewer_title": None,
+            "reviewer_company_size": None,
+            "rating": rating_val,
+            "title": r.get("title"),
+            "body": r.get("text"),
+            "pros": None,
+            "cons": None,
+            "date": date,
+            "verified": bool(r.get("labels", {}).get("verification")),
+            "helpful_count": None,
+            "review_url": product_url,
+            "product_url": product_url,
+        })
+    return records
+
+
 async def scrape(
     company: str,
     max_reviews: int = 50,
@@ -116,16 +171,32 @@ async def scrape(
 
             try:
                 resp = await client.get(product_url, params=params)
-            except Exception:
+            except Exception as exc:
+                print(f"[trustpilot] request failed: {exc}", flush=True)
                 break
 
+            print(f"[trustpilot] status={resp.status_code} len={len(resp.text)} url={resp.url}", flush=True)
             if resp.status_code == 404:
                 break
             if resp.status_code != 200:
+                print(f"[trustpilot] non-200 snippet: {resp.text[:300]}", flush=True)
                 await asyncio.sleep(2)
                 break
 
+            # Check for bot-challenge pages
+            if "Verifying" in resp.text[:500] or "challenge" in resp.text[:500].lower():
+                print(f"[trustpilot] bot challenge detected: {resp.text[:300]}", flush=True)
+                break
+
+            ld_count = resp.text.count('"application/ld+json"')
+            print(f"[trustpilot] JSON-LD blocks found: {ld_count}", flush=True)
+
             page_records = _parse_reviews(resp.text, company, product_url)
+            print(f"[trustpilot] parsed {len(page_records)} reviews from page {page_num}", flush=True)
+            if not page_records:
+                # Try parsing __NEXT_DATA__ as fallback
+                page_records = _parse_next_data(resp.text, company, product_url)
+                print(f"[trustpilot] __NEXT_DATA__ fallback: {len(page_records)} reviews", flush=True)
             if not page_records:
                 break
 

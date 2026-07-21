@@ -1,4 +1,4 @@
-"""Capterra scraper — uses curl_cffi to bypass Cloudflare TLS fingerprinting."""
+"""Capterra scraper — uses patchright (patched Chromium) to bypass Cloudflare."""
 
 import asyncio
 import re
@@ -6,7 +6,7 @@ from datetime import datetime
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
+from patchright.async_api import async_playwright
 
 SORT_MAP = {
     "recent": "most_recent",
@@ -15,35 +15,56 @@ SORT_MAP = {
     "lowest": "lowest_rating",
 }
 
+LAUNCH_ARGS = ["--no-sandbox", "--disable-setuid-sandbox"]
 
-async def _fetch(session: AsyncSession, url: str) -> str:
+
+async def _resolve_proxy(get_proxy_url) -> str | None:
+    if not get_proxy_url:
+        return None
     try:
-        resp = await session.get(url, timeout=30)
-        print(f"[capterra] GET {url} -> {resp.status_code}, html_len={len(resp.text)}", flush=True)
-        print(f"[capterra] html preview: {resp.text[:400]}", flush=True)
-        if resp.status_code == 200:
-            return resp.text
+        return await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
+    except Exception:
+        return None
+
+
+async def _get_html(page, url: str, label: str) -> str:
+    html = ""
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
-        print(f"[capterra] fetch error {url}: {e}", flush=True)
-    return ""
+        print(f"[{label}] goto failed: {e}", flush=True)
+
+    for poll in range(15):
+        try:
+            html = await page.content()
+        except Exception:
+            html = ""
+        print(f"[{label}] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
+        if html and len(html) > 500:
+            break
+        await asyncio.sleep(4)
+    return html
 
 
 async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
-    proxy = None
-    if get_proxy_url:
-        try:
-            proxy = await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
-        except Exception:
-            pass
-
+    proxy = await _resolve_proxy(get_proxy_url)
     if proxy:
         masked = proxy.split("@")[-1] if "@" in proxy else proxy
-        print(f"[capterra] using proxy: ...@{masked}", flush=True)
+        print(f"[capterra] search using proxy: ...@{masked}", flush=True)
 
-    proxies = {"https": proxy, "http": proxy} if proxy else None
-    async with AsyncSession(impersonate="chrome", proxies=proxies) as session:
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
+        ctx_opts: dict = {}
+        if proxy:
+            ctx_opts["proxy"] = {"server": proxy}
+        context = await browser.new_context(**ctx_opts)
+        page = await context.new_page()
+
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
-        html = await _fetch(session, url)
+        html = await _get_html(page, url, "capterra")
+        await browser.close()
+
+    print(f"[capterra] search html preview: {html[:400]}", flush=True)
 
     if not html:
         return None
@@ -55,7 +76,7 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
             print(f"[capterra] found product link: {href}", flush=True)
             return "https://www.capterra.com" + href if href.startswith("/") else href
 
-    print("[capterra] no product link found in search HTML", flush=True)
+    print("[capterra] no product link found", flush=True)
     return None
 
 
@@ -146,14 +167,7 @@ async def scrape(
     if not product_url:
         return []
 
-    proxy = None
-    if _get_proxy:
-        try:
-            proxy = await _get_proxy() if asyncio.iscoroutinefunction(_get_proxy) else _get_proxy()
-        except Exception:
-            pass
-
-    proxies = {"https": proxy, "http": proxy} if proxy else None
+    proxy = await _resolve_proxy(_get_proxy)
 
     if "/reviews" in product_url:
         reviews_url = product_url.rstrip("/") + "/"
@@ -162,16 +176,24 @@ async def scrape(
     ct_sort = SORT_MAP.get(sort_by, "most_recent")
     page_num = 1
 
-    async with AsyncSession(impersonate="chrome", proxies=proxies) as session:
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=LAUNCH_ARGS)
+        ctx_opts: dict = {}
+        if proxy:
+            ctx_opts["proxy"] = {"server": proxy}
+        context = await browser.new_context(**ctx_opts)
+        page = await context.new_page()
+
         while len(records) < max_reviews:
             url = f"{reviews_url}?sort={ct_sort}&page={page_num}"
             if min_rating:
                 url += f"&rating={min_rating}"
 
-            html = await _fetch(session, url)
+            html = await _get_html(page, url, "capterra-reviews")
             if not html:
                 break
 
+            print(f"[capterra] reviews page {page_num} html preview: {html[:300]}", flush=True)
             page_records = _parse_reviews(html, company, product_url)
             if not page_records:
                 break
@@ -179,5 +201,7 @@ async def scrape(
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1.5)
+
+        await browser.close()
 
     return records[:max_reviews]

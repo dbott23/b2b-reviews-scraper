@@ -10,7 +10,7 @@ from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
+from patchright.async_api import async_playwright
 
 SORT_MAP_API = {
     "recent": "createdat.desc",
@@ -196,19 +196,32 @@ async def _scrape_web(
     else:
         print("[trustpilot] no proxy — direct connection", flush=True)
 
-    proxies = {"https": proxy, "http": proxy} if proxy else None
     page_num = 1
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+        ctx_opts: dict = {}
+        if proxy:
+            ctx_opts["proxy"] = {"server": proxy}
+        context = await browser.new_context(**ctx_opts)
+        page = await context.new_page()
 
-    async with AsyncSession(impersonate="chrome", proxies=proxies) as session:
         while len(records) < max_reviews:
             url = f"{product_url}?sort={sort_param}&page={page_num}"
+            html = ""
             try:
-                resp = await session.get(url, timeout=30)
-                html = resp.text if resp.status_code == 200 else ""
-                print(f"[trustpilot] page {page_num} status={resp.status_code} html_len={len(html)}", flush=True)
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             except Exception as e:
-                print(f"[trustpilot] fetch failed page {page_num}: {e}", flush=True)
-                html = ""
+                print(f"[trustpilot] goto failed page {page_num}: {e}", flush=True)
+
+            for poll in range(15):
+                try:
+                    html = await page.content()
+                except Exception:
+                    html = ""
+                print(f"[trustpilot] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
+                if html and len(html) > 500:
+                    break
+                await asyncio.sleep(4)
 
             print(f"[trustpilot] html preview: {html[:300]}", flush=True)
 
@@ -234,6 +247,8 @@ async def _scrape_web(
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(1.5)
+
+        await browser.close()
 
     return records[:max_reviews]
 

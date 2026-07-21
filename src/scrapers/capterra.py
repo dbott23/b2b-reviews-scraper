@@ -50,7 +50,7 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
 
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(3)
             html = await page.content()
         except Exception as e:
@@ -194,7 +194,7 @@ async def scrape(
                 url += f"&rating={min_rating}"
 
             try:
-                await page.goto(url, wait_until="commit", timeout=30000)
+                await page.goto(url, wait_until="commit", timeout=60000)
             except Exception:
                 break
             try:

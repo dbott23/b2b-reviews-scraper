@@ -198,7 +198,7 @@ async def _scrape_web(
 
     page_num = 1
     proxy_opts = {"server": proxy} if proxy else None
-    async with AsyncCamoufox(headless=True, proxy=proxy_opts) as browser:
+    async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
         page = await browser.new_page()
 
         while len(records) < max_reviews:

@@ -51,7 +51,7 @@ async def _search_product_url(company: str, get_proxy_url=None) -> str | None:
         print(f"[capterra] search using proxy: ...@{masked}", flush=True)
 
     proxy_opts = {"server": proxy} if proxy else None
-    async with AsyncCamoufox(headless=True, proxy=proxy_opts) as browser:
+    async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
         page = await browser.new_page()
         url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
         html = await _get_html(page, url, "capterra")
@@ -169,7 +169,7 @@ async def scrape(
     ct_sort = SORT_MAP.get(sort_by, "most_recent")
     page_num = 1
 
-    async with AsyncCamoufox(headless=True, proxy=proxy_opts) as browser:
+    async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
         page = await browser.new_page()
 
         while len(records) < max_reviews:

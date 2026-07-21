@@ -11,8 +11,6 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from camoufox.async_api import AsyncCamoufox
 
-from src.scrapers._stealth import apply_stealth
-
 SORT_MAP = {
     "recent": "most_recent",
     "helpful": "most_helpful",
@@ -132,126 +130,31 @@ async def scrape(
     sort_by: str = "recent",
     min_rating: int | None = None,
     proxy_url: str | None = None,
-    get_proxy_url=None,  # async callable () -> str, for per-page rotation
+    get_proxy_url=None,
     **_kwargs,
 ) -> list[dict]:
     records: list[dict] = []
 
-    async def _fresh_proxy() -> str | None:
-        if get_proxy_url:
-            try:
-                return await get_proxy_url()
-            except Exception:
-                pass
-        return proxy_url
+    proxy = None
+    if get_proxy_url:
+        try:
+            proxy = await get_proxy_url() if asyncio.iscoroutinefunction(get_proxy_url) else get_proxy_url()
+        except Exception:
+            pass
+    if not proxy:
+        proxy = proxy_url
 
-    async def _new_context(pw, browser_ref: list):
-        if browser_ref:
-            try:
-                await browser_ref[0].close()
-            except Exception:
-                pass
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
-        browser_ref.clear()
-        browser_ref.append(browser)
-        url = await _fresh_proxy()
-        context_opts: dict = {
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "extra_http_headers": {
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"macOS"',
-            },
-            "viewport": {"width": 1440, "height": 900},
-        }
-        if url:
-            context_opts["proxy"] = {"server": url}
-        context = await browser.new_context(**context_opts)
-        page = await context.new_page()
-        await apply_stealth(page)
-        return page
+    if proxy:
+        masked = proxy.split("@")[-1] if "@" in proxy else proxy
+        print(f"[g2] using proxy: ...@{masked}", flush=True)
 
-    async with async_playwright() as pw:
-        browser_ref: list = []
-        page = await _new_context(pw, browser_ref)
+    proxy_opts = {"server": proxy} if proxy else None
+    slug = re.sub(r"[^a-z0-9]+", "-", company.lower()).strip("-")
+    product_url = f"https://www.g2.com/products/{slug}/reviews"
+    g2_sort = SORT_MAP.get(sort_by, "most_recent")
 
-        # Derive product slug directly from company name — avoids an extra DataDome-exposed search page
-        slug = re.sub(r"[^a-z0-9]+", "-", company.lower()).strip("-")
-
-        # Verify the slug resolves — try the direct reviews URL first, fall back to search
-        product_url_candidate = f"https://www.g2.com/products/{slug}/reviews"
-        resolved_slug = None
-
-        for attempt in range(2):
-            try:
-                await page.goto(product_url_candidate, wait_until="domcontentloaded", timeout=30000)
-            except Exception:
-                pass
-
-            try:
-                await page.wait_for_function(
-                    "document.title !== '' && document.title !== 'Just a moment...'",
-                    timeout=15000,
-                )
-            except Exception:
-                pass
-
-            await asyncio.sleep(3)
-
-            page_title = await page.title()
-            print(f"[g2] attempt {attempt}: title={page_title!r}, url={page.url}", flush=True)
-
-            if await _is_blocked(page):
-                print(f"[g2] DataDome block detected on attempt {attempt}", flush=True)
-                if attempt == 0:
-                    page = await _new_context(pw, browser_ref)
-                    continue
-                break
-
-            # Check if we landed on a real product page or got redirected to search
-            current_url = page.url
-            m = re.search(r"/products/([^/?#]+)", current_url)
-            if m:
-                resolved_slug = m.group(1)
-                print(f"[g2] resolved slug from URL: {resolved_slug}", flush=True)
-            else:
-                # Try search as fallback
-                try:
-                    await page.goto(
-                        f"https://www.g2.com/search?query={company}",
-                        wait_until="domcontentloaded",
-                        timeout=25000,
-                    )
-                    await asyncio.sleep(3)
-                except Exception:
-                    pass
-                link = await page.query_selector("a[href*='/products/'][href*='/reviews']")
-                if not link:
-                    link = await page.query_selector("a[href*='/products/']")
-                if link:
-                    href = await link.get_attribute("href") or ""
-                    m2 = re.search(r"/products/([^/?#]+)", href)
-                    if m2:
-                        resolved_slug = m2.group(1)
-            break
-
-        if not resolved_slug:
-            if browser_ref:
-                await browser_ref[0].close()
-            return []
-
-        slug = resolved_slug
-
-        product_url = f"https://www.g2.com/products/{resolved_slug}/reviews"
-        g2_sort = SORT_MAP.get(sort_by, "most_recent")
+    async with AsyncCamoufox(headless=True, proxy=proxy_opts, firefox_user_prefs={"security.sandbox.content.level": 0}) as browser:
+        page = await browser.new_page()
         page_num = 1
 
         while len(records) < max_reviews:
@@ -259,44 +162,35 @@ async def scrape(
             if min_rating:
                 url += f"&filters[star_rating]={min_rating}"
 
+            html = ""
             try:
-                await page.goto(url, wait_until="commit", timeout=25000)
-            except Exception:
-                pass
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as e:
+                print(f"[g2] goto failed page {page_num}: {e}", flush=True)
 
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=60000)
-            except Exception:
-                pass
-            await asyncio.sleep(4)
-            try:
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            except Exception:
-                pass
-            await asyncio.sleep(2)
+            for poll in range(10):
+                try:
+                    html = await page.content()
+                except Exception:
+                    html = ""
+                print(f"[g2] poll {poll}: url={page.url}, html_len={len(html)}", flush=True)
+                if html and len(html) > 500:
+                    break
+                await asyncio.sleep(4)
+
+            if not html:
+                break
 
             if await _is_blocked(page):
-                # Rotate proxy mid-pagination and retry this page once
-                page = await _new_context(pw, browser_ref)
-                try:
-                    await page.goto(url, wait_until="commit", timeout=25000)
-                except Exception:
-                    pass
-                await asyncio.sleep(5)
-                if await _is_blocked(page):
-                    break
+                print("[g2] DataDome block detected — stopping", flush=True)
+                break
 
-            html = await page.content()
             page_records = _parse_reviews(html, company, product_url)
-
             if not page_records:
                 break
 
             records.extend(page_records)
             page_num += 1
             await asyncio.sleep(2)
-
-        if browser_ref:
-            await browser_ref[0].close()
 
     return records[:max_reviews]

@@ -185,11 +185,18 @@ async def scrape(
 
         # Search for the product — rotate proxy if blocked
         for attempt in range(2):
+            # Pre-warm: visit homepage first to build a realistic browsing history
+            try:
+                await page.goto("https://www.g2.com/", wait_until="domcontentloaded", timeout=20000)
+                await asyncio.sleep(2)
+            except Exception:
+                pass
+
             try:
                 await page.goto(
                     f"https://www.g2.com/search?query={company}",
-                    wait_until="commit",
-                    timeout=20000,
+                    wait_until="domcontentloaded",
+                    timeout=25000,
                 )
             except Exception:
                 pass
@@ -197,12 +204,12 @@ async def scrape(
             try:
                 await page.wait_for_function(
                     "document.title !== 'g2.com' && document.title !== '' && document.title !== 'Just a moment...'",
-                    timeout=20000,
+                    timeout=25000,
                 )
             except Exception:
                 pass
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
             if not await _is_blocked(page):
                 break

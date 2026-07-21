@@ -18,19 +18,34 @@ SORT_MAP = {
 
 
 async def _search_product_url(page, company: str) -> str | None:
-    await page.goto(
-        f"https://www.capterra.com/search/?query={company}",
-        wait_until="commit",
-        timeout=30000,
-    )
-    # First product card link
-    link = await page.query_selector("a[href*='/p/']")
-    if not link:
+    try:
+        await page.goto(
+            f"https://www.capterra.com/search/?query={company}",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+    except Exception:
         return None
-    href = await link.get_attribute("href")
-    if not href:
-        return None
-    return "https://www.capterra.com" + href if href.startswith("/") else href
+
+    # Wait for any product card links to appear (JS-rendered)
+    for selector in [
+        "a[href*='/p/']",
+        "a[href*='/reviews/']",
+        "a[href*='/software/']",
+        "[data-testid*='result'] a",
+        ".card a[href]",
+    ]:
+        try:
+            await page.wait_for_selector(selector, timeout=8000)
+            link = await page.query_selector(selector)
+            if link:
+                href = await link.get_attribute("href") or ""
+                if href:
+                    return "https://www.capterra.com" + href if href.startswith("/") else href
+        except Exception:
+            continue
+
+    return None
 
 
 def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
@@ -139,8 +154,11 @@ async def scrape(
             await browser.close()
             return []
 
-        # Navigate to reviews tab
-        reviews_url = product_url.rstrip("/") + "/reviews/"
+        # Build reviews URL — product_url may already contain /reviews/
+        if "/reviews" in product_url:
+            reviews_url = product_url.rstrip("/") + "/"
+        else:
+            reviews_url = product_url.rstrip("/") + "/reviews/"
         ct_sort = SORT_MAP.get(sort_by, "most_recent")
         page_num = 1
 
@@ -149,8 +167,19 @@ async def scrape(
             if min_rating:
                 url += f"&rating={min_rating}"
 
-            await page.goto(url, wait_until="commit", timeout=30000)
-            await asyncio.sleep(5)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                break
+            # Wait for review cards to render
+            try:
+                await page.wait_for_selector(
+                    "[data-testid='review-card'], .review-card, article[class*='review'], [class*='ReviewCard']",
+                    timeout=10000,
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(3)
             html = await page.content()
             page_records = _parse_reviews(html, company, product_url)
 

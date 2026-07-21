@@ -32,11 +32,98 @@ def _derive_domain(company: str) -> str:
     return f"{slug}.com"
 
 
+def _extract_next_data_reviews(next_data: dict, company: str, product_url: str) -> list[dict]:
+    """Extract reviews from Trustpilot's embedded __NEXT_DATA__ JSON (most reliable)."""
+    pp = (next_data or {}).get("props", {}).get("pageProps", {})
+    # Reviews can be at several paths depending on page version
+    raw = (
+        pp.get("reviews")
+        or pp.get("reviewsList")
+        or (pp.get("businessUnit") or {}).get("reviews")
+        or []
+    )
+    records = []
+    for r in raw:
+        rating_val = r.get("rating") or r.get("stars")
+        date_str = r.get("dates", {}).get("publishedDate") or r.get("createdAt") or ""
+        try:
+            date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).date().isoformat()
+        except Exception:
+            date = date_str or None
+
+        consumer = r.get("consumer") or {}
+        labels = r.get("labels") or {}
+        verified = bool(labels.get("verification") or labels.get("verified"))
+
+        review_id = r.get("id") or ""
+        review_url = f"https://www.trustpilot.com/reviews/{review_id}" if review_id else product_url
+
+        records.append({
+            "company": company,
+            "platform": "trustpilot",
+            "reviewer_name": consumer.get("displayName"),
+            "reviewer_title": None,
+            "reviewer_company_size": None,
+            "rating": float(rating_val) if rating_val else None,
+            "title": r.get("title"),
+            "body": r.get("text"),
+            "pros": None,
+            "cons": None,
+            "date": date,
+            "verified": verified,
+            "helpful_count": None,
+            "review_url": review_url,
+            "product_url": product_url,
+        })
+    return records
+
+
 def _parse_web_reviews(html: str, company: str, product_url: str) -> list[dict]:
+    """Fallback: parse Trustpilot HTML with BeautifulSoup."""
     soup = BeautifulSoup(html, "html.parser")
     records = []
 
-    for card in soup.select("[data-service-review-card-paper], article[class*='styles_reviewCard']"):
+    # Try JSON-LD structured data first — more stable than CSS classes
+    for script in soup.select("script[type='application/ld+json']"):
+        try:
+            import json
+            data = json.loads(script.string or "")
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                if item.get("@type") != "Review":
+                    continue
+                rating_val = (item.get("reviewRating") or {}).get("ratingValue")
+                date_str = item.get("datePublished") or ""
+                try:
+                    date = datetime.fromisoformat(date_str).date().isoformat()
+                except Exception:
+                    date = date_str or None
+                author = item.get("author") or {}
+                records.append({
+                    "company": company,
+                    "platform": "trustpilot",
+                    "reviewer_name": author.get("name") if isinstance(author, dict) else str(author),
+                    "reviewer_title": None,
+                    "reviewer_company_size": None,
+                    "rating": float(rating_val) if rating_val else None,
+                    "title": item.get("name"),
+                    "body": item.get("reviewBody"),
+                    "pros": None,
+                    "cons": None,
+                    "date": date,
+                    "verified": False,
+                    "helpful_count": None,
+                    "review_url": product_url,
+                    "product_url": product_url,
+                })
+        except Exception:
+            continue
+
+    if records:
+        return records
+
+    # Last resort: CSS selectors
+    for card in soup.select("[data-service-review-card-paper], article[class*='reviewCard']"):
         rating = None
         star_el = card.select_one("[class*='star-rating'] img, [data-service-review-rating]")
         if star_el:
@@ -45,10 +132,10 @@ def _parse_web_reviews(html: str, company: str, product_url: str) -> list[dict]:
             if m:
                 rating = float(m.group(1))
 
-        title_el = card.select_one("h2[data-service-review-title-typography], [class*='title']")
+        title_el = card.select_one("h2")
         title = title_el.get_text(strip=True) if title_el else None
 
-        body_el = card.select_one("[data-service-review-text-typography], [class*='reviewContent'] p")
+        body_el = card.select_one("p")
         body = body_el.get_text(strip=True) if body_el else None
 
         name_el = card.select_one("[class*='consumerName'], [data-consumer-name-typography]")
@@ -60,14 +147,6 @@ def _parse_web_reviews(html: str, company: str, product_url: str) -> list[dict]:
             date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).date().isoformat()
         except Exception:
             date = date_str or None
-
-        verified = bool(card.select_one("[class*='verified'], [data-service-review-verified]"))
-
-        review_link = card.select_one("a[href*='/reviews/']")
-        review_url = None
-        if review_link:
-            href = review_link.get("href", "")
-            review_url = "https://www.trustpilot.com" + href if href.startswith("/") else href
 
         if not (title or body):
             continue
@@ -84,9 +163,9 @@ def _parse_web_reviews(html: str, company: str, product_url: str) -> list[dict]:
             "pros": None,
             "cons": None,
             "date": date,
-            "verified": verified,
+            "verified": False,
             "helpful_count": None,
-            "review_url": review_url or product_url,
+            "review_url": product_url,
             "product_url": product_url,
         })
 
@@ -136,8 +215,21 @@ async def _scrape_web(
                 break
 
             await asyncio.sleep(3)
-            html = await page.content()
-            page_records = _parse_web_reviews(html, company, product_url)
+
+            # Prefer __NEXT_DATA__ JSON — it's stable across HTML class renames
+            next_data = await page.evaluate("""
+                () => {
+                    const el = document.getElementById('__NEXT_DATA__');
+                    if (!el) return null;
+                    try { return JSON.parse(el.textContent); } catch(e) { return null; }
+                }
+            """)
+
+            if next_data:
+                page_records = _extract_next_data_reviews(next_data, company, product_url)
+            else:
+                html = await page.content()
+                page_records = _parse_web_reviews(html, company, product_url)
 
             if not page_records:
                 break

@@ -155,3 +155,15 @@ Yes, as long as the product has a listing on the platform. If a product is very 
 
 **Can I use this alongside the AI Brand Visibility Tracker?**
 Yes — they're complementary. The [AI Brand Visibility Tracker](https://apify.com/dbott23/ai-brand-visibility-tracker) tells you what AI assistants say about a brand; this actor tells you what real customers say on review platforms. Together they give you the full picture of a brand's reputation.
+
+---
+
+## More from dbott23
+
+| Actor | What it does |
+|---|---|
+| [App Store & Google Play Reviews Scraper](https://apify.com/dbott23/appstore-reviews-scraper) | Export iOS and Android app reviews by keyword or app ID |
+| [Trustpilot Reviews Scraper](https://apify.com/dbott23/trustpilot-reviews-scraper) | Export Trustpilot reviews to CSV or JSON — no API key needed |
+| [Bluesky Posts Scraper](https://apify.com/dbott23/bluesky-posts-scraper) | Search and export Bluesky posts by keyword or user profile |
+| [AI Brand Visibility Tracker](https://apify.com/dbott23/ai-brand-visibility-tracker) | Track how AI assistants mention your brand vs. competitors |
+| [AI Citation Auditor](https://apify.com/dbott23/ai-citation-auditor) | Check if your website is cited by ChatGPT, Perplexity, and Gemini |

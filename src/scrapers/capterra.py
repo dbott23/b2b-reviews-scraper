@@ -127,50 +127,71 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     records = []
 
-    for card in soup.select("[data-testid='review-card'], .review-card, article[class*='review']"):
-        rating = None
-        rating_el = card.select_one("[aria-label*='star'], [class*='rating']")
-        if rating_el:
-            m = re.search(r"(\d[\d.]*)", rating_el.get("aria-label", "") or rating_el.text)
-            if m:
-                try:
-                    rating = float(m.group(1))
-                except ValueError:
-                    pass
+    container = soup.select_one('[data-test-id="review-cards-container"]')
+    if not container:
+        return records
 
-        title_el = card.select_one("h3, [class*='title'], [class*='headline']")
+    cards = container.select(":scope > div")
+    print(f"[capterra] found {len(cards)} review card divs in container", flush=True)
+    if cards:
+        # Print first card HTML for structure diagnosis
+        print(f"[capterra] first card HTML preview: {str(cards[0])[:800]}", flush=True)
+
+    for card in cards:
+        # Reviewer name from profile pic alt (e.g., "Miguel J. D. avatar")
+        pic = card.find(attrs={"data-testid": "reviewer-profile-pic"})
+        reviewer_name = None
+        if pic:
+            alt = pic.get("alt", "")
+            reviewer_name = alt.replace(" avatar", "").strip() or None
+
+        # Rating from data-testid
+        rating = None
+        for testid in ("Overall Rating-rating", "rating"):
+            rating_el = card.find(attrs={"data-testid": testid})
+            if rating_el:
+                m = re.search(r"(\d[\d.]*)", rating_el.get_text(strip=True) or rating_el.get("aria-label", ""))
+                if m:
+                    try:
+                        rating = float(m.group(1))
+                        break
+                    except ValueError:
+                        pass
+
+        # Title — h3 or first heading
+        title_el = card.find(["h3", "h2"])
         title = title_el.get_text(strip=True) if title_el else None
 
-        body_el = card.select_one("[class*='body'], [class*='comment'], p")
-        body = body_el.get_text(strip=True) if body_el else None
-        pros = cons = None
-        for label_el in card.select("[class*='pros'], [class*='cons']"):
-            text = label_el.get_text(strip=True)
-            label = label_el.get("class", [""])[0].lower()
-            if "pros" in label:
+        # Pros/cons: look for elements containing "Pros" / "Cons" labels
+        pros = cons = body = None
+        for p in card.find_all("p"):
+            text = p.get_text(strip=True)
+            prev = p.find_previous_sibling()
+            prev_text = prev.get_text(strip=True).lower() if prev else ""
+            if "pros" in prev_text:
                 pros = text
-            elif "cons" in label:
+            elif "cons" in prev_text:
                 cons = text
 
-        reviewer_el = card.select_one("[class*='reviewer'], [class*='author']")
-        reviewer_name = reviewer_el.get_text(strip=True) if reviewer_el else None
+        # Body: largest paragraph or div text
+        paragraphs = [el.get_text(strip=True) for el in card.find_all("p") if len(el.get_text(strip=True)) > 50]
+        if paragraphs:
+            body = max(paragraphs, key=len)
 
-        date_el = card.select_one("time, [class*='date']")
-        date_str = ""
-        if date_el:
-            date_str = date_el.get("datetime") or date_el.get_text(strip=True)
+        date_el = card.find("time")
+        date_str = date_el.get("datetime", "") if date_el else ""
         try:
             date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).date().isoformat()
         except Exception:
             date = date_str or None
 
-        review_link = card.select_one("a[href*='/reviews/']")
+        review_link = card.find("a", href=lambda h: h and "/reviews/" in h)
         review_url = None
         if review_link:
             href = review_link.get("href", "")
             review_url = "https://www.capterra.com" + href if href.startswith("/") else href
 
-        if not (title or body):
+        if not (title or body or reviewer_name):
             continue
 
         records.append({

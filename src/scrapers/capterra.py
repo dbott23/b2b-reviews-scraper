@@ -133,9 +133,6 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
 
     cards = container.select(":scope > div")
     print(f"[capterra] found {len(cards)} review card divs in container", flush=True)
-    if cards:
-        # Print first card HTML for structure diagnosis
-        print(f"[capterra] first card HTML preview: {str(cards[0])[:800]}", flush=True)
 
     for card in cards:
         # Reviewer name from profile pic alt (e.g., "Miguel J. D. avatar")
@@ -371,16 +368,6 @@ async def _try_scrape(
                 print(f"[capterra] first API review keys: {list(page_records[0].keys()) if page_records else []}", flush=True)
 
             if not page_records:
-                # Diagnostic: what's in the HTML?
-                testids = re.findall(r'data-testid=["\']([^"\']+)["\']', html[:300000])
-                review_testids = [t for t in set(testids) if "review" in t.lower()]
-                all_testids = list(set(testids))[:30]
-                print(f"[capterra] all data-testids: {all_testids}", flush=True)
-                print(f"[capterra] review data-testids: {review_testids[:10]}", flush=True)
-                # Look near 'reviewer-profile-pic' for parent structure
-                idx = html.find("reviewer-profile-pic")
-                if idx >= 0:
-                    print(f"[capterra] context around reviewer-profile-pic: {html[max(0,idx-500):idx+200]}", flush=True)
                 # Fallback to CSS parsing
                 page_records = _parse_reviews(html, company, product_url)
                 print(f"[capterra] reviews page {page_num}: {len(page_records)} records (CSS fallback)", flush=True)

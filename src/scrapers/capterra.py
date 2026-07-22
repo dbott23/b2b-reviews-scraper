@@ -39,7 +39,7 @@ async def _resolve_proxy(get_proxy_url) -> str | None:
         return None
 
 
-async def _get_html(page, url: str, label: str, max_polls: int = 40) -> str:
+async def _get_html(page, url: str, label: str, max_polls: int = 20) -> str:
     """Navigate and wait until we get real content (not a bot challenge page)."""
     html = ""
     try:
@@ -47,6 +47,7 @@ async def _get_html(page, url: str, label: str, max_polls: int = 40) -> str:
     except Exception as e:
         print(f"[{label}] goto failed: {e}", flush=True)
 
+    prev_challenge = True
     for poll in range(max_polls):
         try:
             html = await page.content()
@@ -58,8 +59,18 @@ async def _get_html(page, url: str, label: str, max_polls: int = 40) -> str:
         m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
         title = (m.group(1) if m else "?")[:60]
         print(f"[{label}] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
-        if html and len(html) > 50000 and not challenge:
-            break
+        if not challenge:
+            if len(html) > 50000 or "__NEXT_DATA__" in html:
+                break
+            # CF just resolved but page still loading — wait for network idle
+            if prev_challenge:
+                print(f"[{label}] CF resolved, waiting for page load...", flush=True)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=20000)
+                except Exception:
+                    pass
+                continue
+        prev_challenge = challenge
         await asyncio.sleep(4)
     return html
 
@@ -74,9 +85,10 @@ def _extract_product_url(html: str) -> str | None:
     return None
 
 
-async def _wait_for_content(page, label: str, max_polls: int = 40) -> str:
+async def _wait_for_content(page, label: str, max_polls: int = 20) -> str:
     """Poll page.content() until we have large non-challenge HTML."""
     html = ""
+    prev_challenge = True
     for poll in range(max_polls):
         try:
             html = await page.content()
@@ -88,8 +100,17 @@ async def _wait_for_content(page, label: str, max_polls: int = 40) -> str:
         m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
         title = (m.group(1) if m else "?")[:60]
         print(f"[{label}] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
-        if html and len(html) > 50000 and not challenge:
-            break
+        if not challenge:
+            if len(html) > 50000 or "__NEXT_DATA__" in html:
+                break
+            if prev_challenge:
+                print(f"[{label}] CF resolved, waiting for page load...", flush=True)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=20000)
+                except Exception:
+                    pass
+                continue
+        prev_challenge = challenge
         await asyncio.sleep(4)
     return html
 

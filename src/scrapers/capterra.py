@@ -170,10 +170,6 @@ async def _try_scrape(
             print(f"[capterra] attempt {attempt}: no product link found", flush=True)
             return None
 
-        print(f"[capterra] attempt {attempt}: navigating to product page: {product_url}", flush=True)
-        await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(3)
-
         if "/reviews" in product_url:
             reviews_url = product_url.rstrip("/") + "/"
         else:
@@ -188,8 +184,8 @@ async def _try_scrape(
 
             html = await _get_html(page, url, "capterra-reviews")
             if not html or _is_challenge(html, page.url):
-                print(f"[capterra] reviews page {page_num}: no content or still challenge — stopping", flush=True)
-                break
+                print(f"[capterra] reviews page {page_num}: no content or still challenge — retrying with new proxy", flush=True)
+                return None
 
             import json as _json
             nd_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)

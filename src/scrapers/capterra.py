@@ -24,9 +24,13 @@ _CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are
 def _is_challenge(html: str, url: str) -> bool:
     m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
     title = m.group(1).lower().strip() if m else ""
+    snippet = html[:8000]
     return (
         any(s in title for s in _CHALLENGE_TITLES)
         or "__cf_chl_rt_tk" in url
+        or "__cf_chl" in snippet
+        or "cf-challenge" in snippet
+        or "challenge-platform" in snippet
     )
 
 
@@ -65,12 +69,14 @@ async def _get_html(page, url: str, label: str, max_polls: int = 20) -> str:
             # CF just resolved but page still loading — wait for network idle
             if prev_challenge:
                 print(f"[{label}] CF resolved, waiting for page load...", flush=True)
+                prev_challenge = False  # only call networkidle once
                 try:
                     await page.wait_for_load_state("networkidle", timeout=20000)
                 except Exception:
                     pass
                 continue
-        prev_challenge = challenge
+        else:
+            prev_challenge = True
         await asyncio.sleep(4)
     return html
 
@@ -105,12 +111,14 @@ async def _wait_for_content(page, label: str, max_polls: int = 20) -> str:
                 break
             if prev_challenge:
                 print(f"[{label}] CF resolved, waiting for page load...", flush=True)
+                prev_challenge = False  # only call networkidle once
                 try:
                     await page.wait_for_load_state("networkidle", timeout=20000)
                 except Exception:
                     pass
                 continue
-        prev_challenge = challenge
+        else:
+            prev_challenge = True
         await asyncio.sleep(4)
     return html
 
@@ -345,9 +353,13 @@ async def _try_scrape(
                 # Diagnostic: what's in the HTML?
                 testids = re.findall(r'data-testid=["\']([^"\']+)["\']', html[:300000])
                 review_testids = [t for t in set(testids) if "review" in t.lower()]
+                all_testids = list(set(testids))[:30]
+                print(f"[capterra] all data-testids: {all_testids}", flush=True)
                 print(f"[capterra] review data-testids: {review_testids[:10]}", flush=True)
-                classes = re.findall(r'class=["\']([^"\']*[Rr]eview[^"\']*)["\']', html[:100000])
-                print(f"[capterra] review class names: {list(set(classes))[:10]}", flush=True)
+                # Look near 'reviewer-profile-pic' for parent structure
+                idx = html.find("reviewer-profile-pic")
+                if idx >= 0:
+                    print(f"[capterra] context around reviewer-profile-pic: {html[max(0,idx-500):idx+200]}", flush=True)
                 # Fallback to CSS parsing
                 page_records = _parse_reviews(html, company, product_url)
                 print(f"[capterra] reviews page {page_num}: {len(page_records)} records (CSS fallback)", flush=True)

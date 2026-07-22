@@ -318,7 +318,7 @@ async def _try_scrape(
             except Exception:
                 pass
 
-        html = await _wait_for_content(page, "capterra-product")
+        html = await _wait_for_content(page, "capterra-product", max_polls=12)
         if not html or _is_challenge(html, page.url):
             print(f"[capterra] attempt {attempt}: product page blocked — retrying with new proxy", flush=True)
             return None

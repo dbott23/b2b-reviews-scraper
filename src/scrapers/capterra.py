@@ -244,10 +244,37 @@ async def _try_scrape(
     """Single scrape attempt. Returns None if blocked (should retry with new proxy)."""
     import json as _json
     records: list[dict] = []
+    api_reviews: list[dict] = []
     search_url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
 
     async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS, geoip=True) as browser:
         page = await browser.new_page()
+
+        # Intercept API responses to capture reviews data loaded client-side
+        async def _on_response(response) -> None:
+            url = response.url
+            if "review" not in url.lower() and "listing" not in url.lower():
+                return
+            if response.status != 200:
+                return
+            try:
+                ct = (response.headers.get("content-type") or "")
+                if "json" not in ct:
+                    return
+                data = await response.json()
+                print(f"[capterra] API: {url} → {type(data).__name__} keys={list(data.keys()) if isinstance(data, dict) else len(data)}", flush=True)
+                reviews_list = None
+                if isinstance(data, list):
+                    reviews_list = data
+                elif isinstance(data, dict):
+                    reviews_list = data.get("reviews") or data.get("reviewList") or data.get("data") or []
+                if reviews_list and isinstance(reviews_list, list) and reviews_list:
+                    print(f"[capterra] API captured {len(reviews_list)} reviews, first keys: {list(reviews_list[0].keys()) if reviews_list else []}", flush=True)
+                    api_reviews.extend(reviews_list)
+            except Exception as e:
+                print(f"[capterra] API intercept error: {e}", flush=True)
+
+        page.on("response", _on_response)
 
         # Step 1: load search page (usually no CF)
         html = await _get_html(page, search_url, "capterra-search", max_polls=15)
@@ -302,12 +329,29 @@ async def _try_scrape(
                 print(f"[capterra] reviews page {page_num}: blocked — retrying with new proxy", flush=True)
                 return None
 
+            # Wait a moment for any API calls to complete
+            await asyncio.sleep(3)
+
             page_records = _extract_reviews_from_next_data(html, company, product_url)
-            print(f"[capterra] reviews page {page_num}: {len(page_records)} records", flush=True)
+            print(f"[capterra] reviews page {page_num}: {len(page_records)} records from __NEXT_DATA__", flush=True)
+
+            if not page_records and api_reviews:
+                print(f"[capterra] using {len(api_reviews)} reviews from API intercept", flush=True)
+                # Convert api_reviews to standard format (diagnostic first)
+                page_records = api_reviews[:max_reviews]
+                print(f"[capterra] first API review keys: {list(page_records[0].keys()) if page_records else []}", flush=True)
+
             if not page_records:
+                # Diagnostic: what's in the HTML?
+                testids = re.findall(r'data-testid=["\']([^"\']+)["\']', html[:300000])
+                review_testids = [t for t in set(testids) if "review" in t.lower()]
+                print(f"[capterra] review data-testids: {review_testids[:10]}", flush=True)
+                classes = re.findall(r'class=["\']([^"\']*[Rr]eview[^"\']*)["\']', html[:100000])
+                print(f"[capterra] review class names: {list(set(classes))[:10]}", flush=True)
                 # Fallback to CSS parsing
                 page_records = _parse_reviews(html, company, product_url)
                 print(f"[capterra] reviews page {page_num}: {len(page_records)} records (CSS fallback)", flush=True)
+
             if not page_records:
                 break
 

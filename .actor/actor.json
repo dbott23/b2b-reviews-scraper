@@ -7,6 +7,10 @@
     "buildTag": "latest",
     "input": "./input_schema.json",
     "dockerfile": "./Dockerfile",
+    "defaultRunOptions": {
+        "timeoutSecs": 1200,
+        "memoryMbytes": 4096
+    },
     "storages": {
         "dataset": {
             "actorSpecification": 1,

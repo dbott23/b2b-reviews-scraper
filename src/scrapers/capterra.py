@@ -21,6 +21,13 @@ FF_PREFS = {"security.sandbox.content.level": 0}
 _CHALLENGE_TITLES = ("just a moment", "verifying connection", "verifying you are human", "attention required", "please wait", "access denied", "403 forbidden", "enable javascript")
 
 
+def _is_hard_block(html: str) -> bool:
+    """True if block can NEVER auto-resolve (CAPTCHA, IP ban). Bail immediately."""
+    m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
+    title = m.group(1).lower().strip() if m else ""
+    return "attention required" in title or "access denied" in title or "403 forbidden" in title
+
+
 def _is_challenge(html: str, url: str) -> bool:
     m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
     title = m.group(1).lower().strip() if m else ""
@@ -63,6 +70,9 @@ async def _get_html(page, url: str, label: str, max_polls: int = 20) -> str:
         m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
         title = (m.group(1) if m else "?")[:60]
         print(f"[{label}] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
+        if challenge and _is_hard_block(html):
+            print(f"[{label}] hard block (Attention Required / Access Denied) — bailing immediately", flush=True)
+            break
         if not challenge:
             if len(html) > 50000 or "__NEXT_DATA__" in html:
                 break
@@ -106,6 +116,9 @@ async def _wait_for_content(page, label: str, max_polls: int = 20) -> str:
         m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
         title = (m.group(1) if m else "?")[:60]
         print(f"[{label}] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
+        if challenge and _is_hard_block(html):
+            print(f"[{label}] hard block (Attention Required / Access Denied) — bailing immediately", flush=True)
+            break
         if not challenge:
             if len(html) > 50000 or "__NEXT_DATA__" in html:
                 break
@@ -336,7 +349,7 @@ async def _try_scrape(
             except Exception:
                 pass
 
-        html = await _wait_for_content(page, "capterra-product", max_polls=12)
+        html = await _wait_for_content(page, "capterra-product", max_polls=20)
         if not html or _is_challenge(html, page.url):
             print(f"[capterra] attempt {attempt}: product page blocked — retrying with new proxy", flush=True)
             return None

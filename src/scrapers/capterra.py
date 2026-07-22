@@ -74,6 +74,26 @@ def _extract_product_url(html: str) -> str | None:
     return None
 
 
+async def _wait_for_content(page, label: str, max_polls: int = 40) -> str:
+    """Poll page.content() until we have large non-challenge HTML."""
+    html = ""
+    for poll in range(max_polls):
+        try:
+            html = await page.content()
+            cur_url = page.url
+        except Exception:
+            html = ""
+            cur_url = ""
+        challenge = _is_challenge(html, cur_url)
+        m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
+        title = (m.group(1) if m else "?")[:60]
+        print(f"[{label}] poll {poll}: html_len={len(html)}, title={title!r}, challenge={challenge}", flush=True)
+        if html and len(html) > 50000 and not challenge:
+            break
+        await asyncio.sleep(4)
+    return html
+
+
 def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     records = []
@@ -145,6 +165,53 @@ def _parse_reviews(html: str, company: str, product_url: str) -> list[dict]:
     return records
 
 
+def _extract_reviews_from_next_data(html: str, company: str, product_url: str) -> list[dict]:
+    import json as _json
+    nd_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
+    if not nd_match:
+        print("[capterra] no __NEXT_DATA__", flush=True)
+        return []
+    try:
+        nd = _json.loads(nd_match.group(1))
+        pp = nd.get("props", {}).get("pageProps", {})
+        print(f"[capterra] __NEXT_DATA__ pageProps keys: {list(pp.keys())}", flush=True)
+        raw = pp.get("reviews") or pp.get("reviewList") or []
+        print(f"[capterra] __NEXT_DATA__ reviews count: {len(raw)}", flush=True)
+        if not raw:
+            return []
+        print(f"[capterra] first review keys: {list(raw[0].keys())}", flush=True)
+        records = []
+        for r in raw:
+            rating_val = r.get("overallRating") or r.get("rating") or r.get("stars")
+            date_str = r.get("publishDate") or r.get("publishedDate") or r.get("createdAt") or ""
+            try:
+                date = datetime.fromisoformat(date_str.replace("Z", "+00:00")).date().isoformat()
+            except Exception:
+                date = date_str or None
+            reviewer = r.get("reviewer") or r.get("author") or {}
+            records.append({
+                "company": company,
+                "platform": "capterra",
+                "reviewer_name": reviewer.get("fullName") or reviewer.get("name") if isinstance(reviewer, dict) else str(reviewer),
+                "reviewer_title": reviewer.get("title") if isinstance(reviewer, dict) else None,
+                "reviewer_company_size": (reviewer.get("company") or {}).get("size") if isinstance(reviewer, dict) else None,
+                "rating": float(rating_val) if rating_val else None,
+                "title": r.get("title"),
+                "body": r.get("description") or r.get("body") or r.get("text"),
+                "pros": r.get("pros"),
+                "cons": r.get("cons"),
+                "date": date,
+                "verified": bool(r.get("verified")),
+                "helpful_count": r.get("helpfulCount"),
+                "review_url": product_url,
+                "product_url": product_url,
+            })
+        return records
+    except Exception as e:
+        print(f"[capterra] __NEXT_DATA__ parse error: {e}", flush=True)
+        return []
+
+
 async def _try_scrape(
     company: str,
     max_reviews: int,
@@ -153,16 +220,18 @@ async def _try_scrape(
     proxy: str | None,
     attempt: int,
 ) -> list[dict] | None:
-    """Single scrape attempt. Returns None if blocked at search phase (should retry with new proxy)."""
+    """Single scrape attempt. Returns None if blocked (should retry with new proxy)."""
+    import json as _json
     records: list[dict] = []
     search_url = f"https://www.capterra.com/search/?query={quote_plus(company)}"
 
     async with AsyncCamoufox(headless=True, proxy=parse_proxy(proxy), firefox_user_prefs=FF_PREFS, geoip=True) as browser:
         page = await browser.new_page()
 
+        # Step 1: load search page (usually no CF)
         html = await _get_html(page, search_url, "capterra-search", max_polls=15)
         if not html or _is_challenge(html, page.url):
-            print(f"[capterra] attempt {attempt}: search blocked by CF/WAF — will retry with new proxy", flush=True)
+            print(f"[capterra] attempt {attempt}: search blocked — retrying with new proxy", flush=True)
             return None
 
         product_url = _extract_product_url(html)
@@ -171,45 +240,67 @@ async def _try_scrape(
             return None
 
         if "/reviews" in product_url:
-            reviews_url = product_url.rstrip("/") + "/"
+            reviews_base = product_url.rstrip("/") + "/"
         else:
-            reviews_url = product_url.rstrip("/") + "/reviews/"
+            reviews_base = product_url.rstrip("/") + "/reviews/"
         ct_sort = SORT_MAP.get(sort_by, "most_recent")
-        page_num = 1
 
+        # Step 2: click the product link (sends proper Referer, avoids extra page.goto CF trigger)
+        product_path = product_url.replace("https://www.capterra.com", "")
+        try:
+            link_el = await page.query_selector(f'a[href="{product_path}"], a[href="{product_url}"]')
+            if link_el:
+                print(f"[capterra] clicking product link: {product_path}", flush=True)
+                await link_el.click()
+            else:
+                print(f"[capterra] no clickable link found, using goto: {product_url}", flush=True)
+                await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"[capterra] click/goto failed: {e}, falling back to goto", flush=True)
+            try:
+                await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
+            except Exception:
+                pass
+
+        html = await _wait_for_content(page, "capterra-product")
+        if not html or _is_challenge(html, page.url):
+            print(f"[capterra] attempt {attempt}: product page blocked — retrying with new proxy", flush=True)
+            return None
+
+        # Step 3: navigate to reviews page via click or goto
+        page_num = 1
         while len(records) < max_reviews:
-            url = f"{reviews_url}?sort={ct_sort}&page={page_num}"
+            url = f"{reviews_base}?sort={ct_sort}&page={page_num}"
             if min_rating:
                 url += f"&rating={min_rating}"
 
-            html = await _get_html(page, url, "capterra-reviews")
+            if page_num == 1:
+                # Try clicking a reviews link on the product page first
+                try:
+                    rev_link = await page.query_selector('a[href*="/reviews/"]')
+                    if rev_link:
+                        href = await rev_link.get_attribute("href")
+                        print(f"[capterra] clicking reviews link: {href}", flush=True)
+                        await rev_link.click()
+                        html = await _wait_for_content(page, "capterra-reviews")
+                    else:
+                        html = await _get_html(page, url, "capterra-reviews")
+                except Exception as e:
+                    print(f"[capterra] reviews click failed: {e}", flush=True)
+                    html = await _get_html(page, url, "capterra-reviews")
+            else:
+                html = await _get_html(page, url, "capterra-reviews")
+
             if not html or _is_challenge(html, page.url):
-                print(f"[capterra] reviews page {page_num}: no content or still challenge — retrying with new proxy", flush=True)
+                print(f"[capterra] reviews page {page_num}: blocked — retrying with new proxy", flush=True)
                 return None
 
-            import json as _json
-            nd_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', html, re.DOTALL)
-            if nd_match:
-                try:
-                    nd = _json.loads(nd_match.group(1))
-                    pp = nd.get("props", {}).get("pageProps", {})
-                    print(f"[capterra] __NEXT_DATA__ pageProps keys: {list(pp.keys())}", flush=True)
-                    reviews_nd = pp.get("reviews") or pp.get("reviewList") or []
-                    print(f"[capterra] __NEXT_DATA__ reviews count: {len(reviews_nd)}", flush=True)
-                    if reviews_nd:
-                        print(f"[capterra] first review keys: {list(reviews_nd[0].keys())}", flush=True)
-                except Exception as e:
-                    print(f"[capterra] __NEXT_DATA__ parse error: {e}", flush=True)
-            else:
-                print("[capterra] no __NEXT_DATA__", flush=True)
-                idx = html.lower().find("review")
-                if idx >= 0:
-                    print(f"[capterra] review context: {html[max(0,idx-50):idx+300]}", flush=True)
-                testids = re.findall(r'data-testid=["\']([^"\']+)["\']', html[:200000])
-                print(f"[capterra] data-testid values: {list(set(testids))[:20]}", flush=True)
-
-            page_records = _parse_reviews(html, company, product_url)
-            print(f"[capterra] reviews page {page_num}: {len(page_records)} records parsed", flush=True)
+            page_records = _extract_reviews_from_next_data(html, company, product_url)
+            print(f"[capterra] reviews page {page_num}: {len(page_records)} records", flush=True)
+            if not page_records:
+                # Fallback to CSS parsing
+                page_records = _parse_reviews(html, company, product_url)
+                print(f"[capterra] reviews page {page_num}: {len(page_records)} records (CSS fallback)", flush=True)
             if not page_records:
                 break
 

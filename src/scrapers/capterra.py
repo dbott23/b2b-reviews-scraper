@@ -66,6 +66,10 @@ async def _get_html(page, url: str, label: str, max_polls: int = 20) -> str:
         except Exception:
             html = ""
             cur_url = url
+        if not html:
+            # page is mid-navigation or crashed — just wait, don't interpret as CF-resolved
+            await asyncio.sleep(2)
+            continue
         challenge = _is_challenge(html, cur_url)
         m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
         title = (m.group(1) if m else "?")[:60]
@@ -112,6 +116,9 @@ async def _wait_for_content(page, label: str, max_polls: int = 20) -> str:
         except Exception:
             html = ""
             cur_url = ""
+        if not html:
+            await asyncio.sleep(2)
+            continue
         challenge = _is_challenge(html, cur_url)
         m = re.search(r"<title[^>]*>([^<]*)</title>", html[:3000], re.IGNORECASE)
         title = (m.group(1) if m else "?")[:60]

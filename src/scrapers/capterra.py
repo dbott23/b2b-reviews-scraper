@@ -295,22 +295,8 @@ async def _try_scrape(
             if min_rating:
                 url += f"&rating={min_rating}"
 
-            if page_num == 1:
-                # Try clicking a reviews link on the product page first
-                try:
-                    rev_link = await page.query_selector('a[href*="/reviews/"]')
-                    if rev_link:
-                        href = await rev_link.get_attribute("href")
-                        print(f"[capterra] clicking reviews link: {href}", flush=True)
-                        await rev_link.click()
-                        html = await _wait_for_content(page, "capterra-reviews")
-                    else:
-                        html = await _get_html(page, url, "capterra-reviews")
-                except Exception as e:
-                    print(f"[capterra] reviews click failed: {e}", flush=True)
-                    html = await _get_html(page, url, "capterra-reviews")
-            else:
-                html = await _get_html(page, url, "capterra-reviews")
+            # CF cookies are already set from product page — goto to reviews URL should work
+            html = await _get_html(page, url, "capterra-reviews")
 
             if not html or _is_challenge(html, page.url):
                 print(f"[capterra] reviews page {page_num}: blocked — retrying with new proxy", flush=True)
